@@ -6,7 +6,7 @@
 <a href="README.en.md">English</a> · <a href="docs/architecture.md">架构</a> · <a href="docs/api.md">接口</a> · <a href="docs/configuration.md">配置</a> · <a href="docs/evaluation.md">评测</a></p>
 
 <p align="center">
-<img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+<img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
 <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue">
 <img alt="Storage: SQLite" src="https://img.shields.io/badge/storage-SQLite-lightgrey">
 </p>
@@ -102,4 +102,4 @@ Penumbra 的整体架构为独立设计，代码为独立实现。
 
 ## 许可证
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE)。2026-10-03 之前发布的版本为 MIT。

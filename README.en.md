@@ -70,4 +70,4 @@ independent implementation.
 
 ## License
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE). Versions published before 2026-10-03 were released under MIT.

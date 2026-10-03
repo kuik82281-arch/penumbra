@@ -1,0 +1,13 @@
+services:
+  penumbra:
+    build: .
+    image: penumbra-memory
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8790:8790"   # only this machine; change deliberately if another host must reach it
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY in .env}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+    volumes:
+      - ./data:/data

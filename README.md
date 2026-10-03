@@ -9,10 +9,27 @@
 <img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
 <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-blue">
 <img alt="Storage: SQLite" src="https://img.shields.io/badge/storage-SQLite-lightgrey">
+<img alt="Docker" src="https://img.shields.io/badge/docker-ready-blue">
 </p>
+
+> **大多数记忆系统努力记住更多。Penumbra 努力不记错。**
 
 Penumbra 是一个独立运行的本地 HTTP 服务。聊天程序把每一句原话交给它；它在后台把对话整理成可追溯的长期记忆，
 并在下一轮对话时，只把真正相关的一两条交回去。
+
+## 它像什么
+
+**像一个认真的日记本，而不是一台录音机。** 原话全部原样收下，但真正写进记忆的只有新的东西：新的进展、新的细节、第一次。
+每天的晚安不会被抄一百遍；连着四天复习同一门课，四天各算一步，不会因为“像昨天”被丢掉。
+
+**像一个不肯乱说的朋友。** 记忆里引用的每一句话都要在原文里找得到；你说“我没那么说过”，错的那条就被改掉，不留在历史里；
+你删掉的事，不会某天又被整理出来。
+
+**像一个会讲故事的人。** 一次搬家、一场考试、一段求职，被按时间串成一条故事线；一件长期的事，记得它现在走到哪、以前是什么样。
+
+**像一个懂分寸的人。** 寒暄的时候不翻旧账；被问到过去才认真去想；每一轮只提起很少几件真正相关的事，刚说过的不再重复。
+
+<p align="center"><img src="docs/images/penumbra-map.jpg" width="100%" alt="Penumbra 记忆系统职责地图"></p>
 
 ## 它解决什么问题
 
@@ -41,6 +58,19 @@ Penumbra 是一个独立运行的本地 HTTP 服务。聊天程序把每一句�
 详细说明见 [docs/architecture.md](docs/architecture.md)。
 
 ## 快速开始
+
+### Docker（推荐）
+
+```bash
+git clone https://github.com/kuik82281-arch/penumbra.git
+cd penumbra
+echo "DEEPSEEK_API_KEY=..." > .env    # 整理记忆用的 LLM（任意 OpenAI 兼容接口，见配置文档）
+docker compose up -d                  # http://127.0.0.1:8790，记忆保存在 ./data
+```
+
+镜像默认不带向量模型（只用关键词 + 实体检索），需要语义检索时按下面的方式本地安装。
+
+### 本地安装
 
 ```bash
 git clone https://github.com/kuik82281-arch/penumbra.git

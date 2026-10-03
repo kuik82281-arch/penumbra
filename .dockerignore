@@ -1,0 +1,7 @@
+.git
+data
+models
+eval/state
+eval/reports
+**/__pycache__
+.env

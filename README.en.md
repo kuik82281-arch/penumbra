@@ -5,9 +5,26 @@
 <p align="center"><strong>A memory service for long-running AI companions: raw messages are never rewritten, curation keeps only what is new, and recall prefers nothing over noise.</strong><br>
 <a href="README.md">中文</a> · <a href="docs/architecture.md">Architecture</a> · <a href="docs/api.md">API</a> · <a href="docs/configuration.md">Configuration</a> · <a href="docs/evaluation.md">Evaluation</a></p>
 
+> **Most memory systems try to remember more. Penumbra tries not to remember wrong.**
+
 Penumbra is a standalone local HTTP service. A chat application hands it every message; in the background it curates
 the conversation into traceable long-term memory, and on the next turn it returns only the one or two memories that
 matter.
+
+## What it is like
+
+**A careful diary, not a tape recorder.** Every message is kept verbatim, but only what is new becomes memory: progress,
+details, firsts. A goodnight is not copied a hundred times; four days of studying the same course are four steps, not
+"the same as yesterday".
+
+**A friend who will not make things up.** Every quoted line must exist in the source. "I never said that" corrects the
+memory instead of becoming history. What you delete does not grow back.
+
+**Someone who tells stories.** A move, an exam season, a job hunt become threads in time order; a long-running thing is
+remembered for where it stands now and how it got there.
+
+**Someone with tact.** Small talk does not dig up the past; a question about the past gets a real search; each turn
+brings up only a few things that truly matter, and not the ones just mentioned.
 
 ## The problem
 
@@ -40,6 +57,19 @@ Companion-style conversations break assumptions most memory layers make:
 See [docs/architecture.md](docs/architecture.md).
 
 ## Quick start
+
+### Docker
+
+```bash
+git clone https://github.com/kuik82281-arch/penumbra.git
+cd penumbra
+echo "DEEPSEEK_API_KEY=..." > .env    # the curation LLM (any OpenAI-compatible endpoint, see configuration)
+docker compose up -d                  # http://127.0.0.1:8790, memory kept in ./data
+```
+
+The image ships without a vector model (lexical + entity retrieval); install locally as below for semantic search.
+
+### Local install
 
 ```bash
 git clone https://github.com/kuik82281-arch/penumbra.git

@@ -33,5 +33,6 @@ def load_config(data_dir: str | os.PathLike | None = None, port: int | None = No
     data = Path(data_dir or os.environ.get("PENUMBRA_DATA") or PACKAGE_ROOT / "data").resolve()
     return Config(
         data_dir=data,
+        host=os.environ.get("PENUMBRA_HOST") or "127.0.0.1",
         port=int(port or os.environ.get("PENUMBRA_PORT") or 8790),
     )

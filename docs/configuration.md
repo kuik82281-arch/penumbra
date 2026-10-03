@@ -5,7 +5,8 @@
 | Variable | Default | Meaning |
 |---|---|---|
 | `PENUMBRA_DATA` | `./data` | data directory (originals, memory database, indexes) |
-| `PENUMBRA_PORT` | `8790` | HTTP port (the service binds 127.0.0.1 only) |
+| `PENUMBRA_HOST` | `127.0.0.1` | address to listen on; the Docker image sets `0.0.0.0` inside the container |
+| `PENUMBRA_PORT` | `8790` | HTTP port |
 | `DEEPSEEK_API_KEY` | — | key for the curation LLM; without it, segments wait in STAGING |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | any OpenAI-compatible chat completions endpoint |
 | `DEEPSEEK_MODEL` | `deepseek-chat` | model name |

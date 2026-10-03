@@ -36,6 +36,7 @@ from .actions import apply_plan, validate_answer
 from .discovery import Discovery
 from .quotes import plan_texts, unverified_quotes
 from .store import Store, dumps, mint, now_iso
+from . import names as names_module
 from . import threads as threads_module
 from .verification import PROMPT_VERSION, Verifier, build_payload
 
@@ -412,6 +413,9 @@ class Pipeline:
             self.store.kv_set("checkpoint", checkpoint)
             with self.store.tx() as db:
                 db.execute("UPDATE runs SET status=?, finished_at=?, summary=?, errors=? WHERE run_id=?", (status, now_iso(), dumps(summary), dumps(errors), run_id))
+            # The names whose memories changed get their profile rewritten (one LLM call each, only when something changed).
+            if summary["statuses"].get("APPLIED") and self.verifier.available():
+                summary["profiles"] = len(names_module.refresh_profiles(self.store, self.verifier.client))
             self.store.audit(f"run.{status}", run_id, after=summary)
             return {"run_id": run_id, "status": status, "summary": summary, "errors": errors}
         except Exception as error:

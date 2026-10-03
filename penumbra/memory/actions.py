@@ -163,9 +163,16 @@ def _episode_fields(raw: dict, allowed_raw: set[str], store: Store, require_all:
     if "relations" in raw and raw["relations"]:
         rels = []
         for r in raw["relations"]:
-            if not isinstance(r, dict) or r.get("type") != "related_to" or r.get("target_kind") not in ("pattern", "episode"):
-                raise Invalid("Episode relations may only be related_to another pattern / episode")
-            rels.append({"type": "related_to", "target_kind": r["target_kind"], "target_id": str(r.get("target_id"))})
+            if not isinstance(r, dict) or r.get("type") not in RELATION_TYPES or r.get("target_kind") not in ("pattern", "episode"):
+                raise Invalid(f"Episode relations must be one of {RELATION_TYPES} to an existing pattern / episode")
+            if r["type"] in CAUSAL and r["target_kind"] != "episode":
+                raise Invalid("a cause or an effect is an episode")
+            target = str(r.get("target_id"))
+            try:
+                (store.episode if r["target_kind"] == "episode" else store.pattern)(target)
+            except NotFound:
+                raise Invalid(f"relation target {target} does not exist") from None
+            rels.append({"type": r["type"], "target_kind": r["target_kind"], "target_id": target})
         out["relations"] = rels
     return out
 
@@ -173,6 +180,9 @@ def _episode_fields(raw: dict, allowed_raw: set[str], store: Store, require_all:
 # ------------------------------------------------------------ promises and plans (commitments.py reads them back)
 
 KINDS = ("", "commitment", "vow", "lexicon", "ritual")
+# Relations an answer may give a new Episode: loosely related, or cause and effect the RAW states outright.
+CAUSAL = ("because_of", "led_to")
+RELATION_TYPES = ("related_to", *CAUSAL)
 # "我们的词": a meme / joke / dirty joke / pet name / nickname / catchphrase of theirs - tagged 梗·… or 昵称·…, one per word,
 # never due, never sinking, and it does not fade (retrieval.py reads the tag).
 LEXICON_PREFIXES = ("梗·", "昵称·")
@@ -509,7 +519,11 @@ def apply_plan(store: Store, plan: Plan, candidate_id: str | None, decision_id: 
                     if linked:
                         applied.setdefault("threads", []).append({"episode_id": ep["episode_id"], **linked})
                 for r in a.get("relations", []):
-                    store.add_relation("related_to", "episode", ep["episode_id"], r["target_kind"], r["target_id"], decision_id=decision_id)
+                    # because_of: this episode happened because of the target; led_to: it brought the target about.
+                    if r["type"] == "led_to":
+                        store.add_relation("because_of", "episode", r["target_id"], "episode", ep["episode_id"], decision_id=decision_id)
+                    else:
+                        store.add_relation(r["type"], "episode", ep["episode_id"], r["target_kind"], r["target_id"], decision_id=decision_id)
             elif kind == "UPDATE_EPISODE":
                 cur = store.episode(a["episode_id"])
                 patch = dict(a["patch"])

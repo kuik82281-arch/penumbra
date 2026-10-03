@@ -40,6 +40,9 @@ MAX_UNITS = 2
 MAX_NAMED = 3
 # Across his sessions: a memory a turn carried is not brought up again by itself for this long (she can still ask).
 COOLDOWN_HOURS = float(os.environ.get("PENUMBRA_COOLDOWN_HOURS", "") or 24.0)
+# "上个月我们聊过什么" asks when it was said, not when it happened: the window is matched against the messages a memory
+# came from (their time), not the event's own time.
+MENTION_CUE = re.compile(r"说过|说起|聊过|聊到|提到|提起|讲过|告诉过|跟我说|和我说|问过")
 RECALL_CUE = re.compile(r"上次|上回|还记得|记不记得|记得吗|那次|那回|那天|之前|以前|说过|讲过|聊过")
 MAX_DOCUMENTS = 2
 TIME_BOOST = 1.25
@@ -429,9 +432,23 @@ class MemoryRead:
         return out
 
     def _with_threads(self, view: dict) -> dict:
-        """The story threads this Episode is part of: its place, and the Episodes just before and after it."""
+        """The story threads this Episode is part of (its place, the Episodes just before and after it) and its causes and
+        effects one step away - context that travels with the memory, not extra memories."""
         view["threads"] = threads_module.context_line(self.store, view["episode_id"])
+        view["causal"] = self._causal(view["episode_id"])
         return view
+
+    def _causal(self, episode_id: str, limit: int = 2) -> list[dict]:
+        out = []
+        for r in self.store.relations("episode", episode_id, "because_of"):
+            other, role = (r["dst_id"], "because") if r["src_id"] == episode_id else (r["src_id"], "led_to")
+            try:
+                e = self.store.episode(other)
+            except NotFound:
+                continue
+            if e["status"] == "active":
+                out.append({"role": role, "episode_id": other, "time": e["time_start"], "content": e["content"][:120]})
+        return out[:limit]
 
     # ------------------------------------------------------------ seen suppression (per Claude session, by version)
 
@@ -441,6 +458,13 @@ class MemoryRead:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=SEEN_TTL_HOURS)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         rows = self.store.all("SELECT ref_kind, ref_id, version FROM seen WHERE conversation_id=? AND session_id=? AND at>=?", (conversation_id, session_id, cutoff))
         return {(r["ref_kind"], r["ref_id"], r["version"]) for r in rows}
+
+    def _raw_said_in(self, window: dict) -> set[str]:
+        """The ids of the original messages written inside a date window."""
+        with self.svc.lock:
+            rows = self.svc.conn.execute("SELECT id FROM originals WHERE substr(created_at, 1, 10) BETWEEN ? AND ?",
+                                         (window["after"], window["before"])).fetchall()
+        return {r["id"] for r in rows}
 
     def _recently_carried(self, conversation_id: str | None) -> set[tuple[str, str, int]]:
         """What any of his sessions in this conversation was given within COOLDOWN_HOURS (by version: a changed memory is new)."""
@@ -520,19 +544,25 @@ class MemoryRead:
         # --- Time signal: a boost inside the named window; a purely temporal question also gets that window's own Episodes
         pure_time = False
         if window:
+            # Occurrence (when it happened) by default; mention (when it was said) when the question asks about talking.
+            mention = bool(MENTION_CUE.search(query))
+            said = self._raw_said_in(window) if mention else set()
+            in_window = ((lambda h: bool(said & set(h.get("sourceOriginalIds") or [])))
+                         if mention else (lambda h: _date_in(h.get("effectiveAt"), window)))
+            window = {**window, "by": "mention" if mention else "occurrence"}
             boosted = 0
             for h in hits:
-                if _date_in(h.get("effectiveAt"), window):
+                if in_window(h):
                     h["score"] = round(h["score"] * TIME_BOOST, 4)
                     boosted += 1
             added = []
             # Nothing but a time and filler words, or a time with a vague rest ("十一月底我收到了什么好消息") that found
             # almost nothing: the window itself is the question, so its own Episodes come in (most important first).
-            if len(_residual(query)) <= 1 or sum(1 for h in hits if _date_in(h.get("effectiveAt"), window)) < 2:
+            if len(_residual(query)) <= 1 or sum(1 for h in hits if in_window(h)) < 2:
                 pure_time = len(_residual(query)) <= 1
                 have = {h["hitId"] for h in hits}
                 for e in self.store.episodes(status="active"):
-                    if e["episode_id"] not in have and _date_in(e["time_start"], window):
+                    if e["episode_id"] not in have and (bool(said & set(e["source_raw_ids"])) if mention else _date_in(e["time_start"], window)):
                         added.append({"hitId": e["episode_id"], "kind": "EPISODE", "score": round(0.3 + 0.4 * e["importance"], 4), "effectiveAt": e["time_start"], "title": e["content"][:40],
                                       "content": e["content"], "sourceOriginalIds": e["source_raw_ids"], "signals": {"time": True}, "reason": f"in {window['label']}"})
                 added = sorted(added, key=lambda h: -h["score"])[:4]
@@ -543,10 +573,13 @@ class MemoryRead:
                     scores = self.reranker.scores(query, [f"{_day_words(h['effectiveAt'])} {h['content'][:400]}" for h in added]) or [0.0] * len(added)
                     added = [h for h, sc in zip(added, scores) if sc >= RESCUE_WINDOW_SCORE]
                 hits.extend(added)
+            if pure_time:  # nothing but a time: the window is the question, so what lies outside it does not answer it
+                hits = [h for h in hits if in_window(h)]
             hits.sort(key=lambda h: -h["score"])
             stages.append({"stage": "time", "window": window, "boosted": boosted, "added": len(added)})
         # --- Names: what she names from her 专名库 is a precise hit, under any of its names
         named = names_module.mentioned(self.store, query)
+        profiles: list[dict] = []
         if named:
             words = [w for n in named for w in n["words"]]
             have = {h["hitId"]: h for h in hits}
@@ -571,6 +604,7 @@ class MemoryRead:
                     added_named += 1
             hits.sort(key=lambda h: -h["score"])
             stages.append({"stage": "names", "named": [n["name"] for n in named], "boosted": boosted, "added": added_named})
+            profiles = [{"name": n["name"], "profile": n["profile"]} for n in named if n.get("profile")]
         # --- Rescue: a question that found nothing - its nearest memories by meaning, kept only if the cross-encoder agrees
         if not pure_time and not hits and QUESTION.search(query):
             rescued = self._rescue(search_text)
@@ -675,7 +709,7 @@ class MemoryRead:
             view = self.pattern_view(p)
             matched = sorted(g["episodes"], key=lambda i: -g["episodes"][i])
             view.update(score=round(g["score"], 4), why=g["why"], matched_episode_ids=matched,
-                        matched_episodes=[{k: ev[k] for k in ("episode_id", "content", "time_start", "state", "version", "threads", "attachment_ids")}
+                        matched_episodes=[{k: ev[k] for k in ("episode_id", "content", "time_start", "state", "version", "threads", "causal", "attachment_ids")}
                                           for ev in (self._with_threads(self.episode_view(self.store.episode(i))) for i in matched[:MATCHED_EPISODES])])
             patterns.append(view)
         episodes = []
@@ -687,12 +721,13 @@ class MemoryRead:
         for h in documents:
             ref = h.get("preferenceRef") or (self.svc.preferences.chunk_ref(h["hitId"]) if getattr(self.svc, "preferences", None) else None) or {}
             docs.append({"id": h["hitId"], "title": h["title"], "text": h["content"][:1200], "documentTitle": ref.get("documentTitle"), "score": h["score"]})
-        status = "LOCKED" if (patterns or episodes or docs) else "NO_MEMORY_NEEDED"
+        status = "LOCKED" if (patterns or episodes or docs or profiles) else "NO_MEMORY_NEEDED"
         stages.append({"stage": "threshold", "status": status, "patterns": len(patterns), "episodes": len(episodes)})
         engine_trace = RetrievalCore.trace(found)
         refs = [{"kind": "pattern", "id": p["pattern_id"], "version": p["version"]} for p in patterns] + [{"kind": "episode", "id": e["episode_id"], "version": e["version"]} for e in episodes]
         latency = round((time.perf_counter() - started) * 1000, 1)
-        result = {"status": status, "turn_id": turn_id, "query": query, "patterns": patterns, "episodes": episodes, "documents": docs, "refs": refs, "reused_lock": False,
+        result = {"status": status, "turn_id": turn_id, "query": query, "patterns": patterns, "episodes": episodes, "documents": docs, "profiles": profiles,
+                  "refs": refs, "reused_lock": False,
                   "search_count": 1, "time_window": window, "latency_ms": latency, "trace": {"stages": stages, "engine": engine_trace}}
         if dry:
             return result

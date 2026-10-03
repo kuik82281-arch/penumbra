@@ -46,3 +46,4 @@
 | `discover.md` | optional span discovery with a small local model (`PENUMBRA_SEGMENTATION=discovery`) |
 | `dream.md`, `her_dream.md` | summaries of dreams handed over by the host |
 | `story.md` | the narrative of a closed thread |
+| `profile.md` | the profile of a name in the name list |

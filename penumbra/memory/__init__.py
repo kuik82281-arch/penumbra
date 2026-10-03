@@ -334,6 +334,8 @@ class MemoryCore:
                 return self.add_note(body)
             if parts == ["names"]:
                 return {"name": names_module.save(self.store, body)}
+            if len(parts) == 3 and parts[0] == "names" and parts[2] == "profile":
+                return {"name": names_module.write_profile(self.store, self.verifier.client, parts[1], force=True)}
             if parts == ["names", "delete"]:
                 return names_module.delete(self.store, str(body.get("name_id") or ""))
             if parts == ["mistakes"]:

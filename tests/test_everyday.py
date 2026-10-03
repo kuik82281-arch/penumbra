@@ -79,3 +79,29 @@ class EverydayTest(Base):
         run_memory(self)
         self.assertTrue(seen and seen[0]["RAW"][0].get("kind") == "his_day_memory")
         self.assertTrue(any("番茄炒蛋" in e["content"] for e in self.memory.store.episodes()))
+
+    def test_when_it_was_said_and_when_it_happens_are_different_windows(self):
+        self.remember("四月我要去大理玩一周", "2026-02-25T10:00:00Z",
+                      lambda p: episode_answer(p, "你说四月要去大理玩一周。", when="2026-04-10T04:00:00Z", entities=["大理"]))
+        eid = self.memory.store.episodes()[0]["episode_id"]
+        def found(q):
+            r = self.memory.read.retrieve({"query": q, "dry": True})
+            return [e["episode_id"] for e in r["episodes"]] + [i for p in r["patterns"] for i in p.get("matched_episode_ids", [])]
+        said = self.memory.read.retrieve({"query": "二月底我说过什么", "dry": True})
+        self.assertEqual(next(s for s in said["trace"]["stages"] if s["stage"] == "time")["window"]["by"], "mention")
+        self.assertIn(eid, found("二月底我说过什么"))
+        self.assertNotIn(eid, found("二月底发生了什么"), "it did not happen in February")
+        self.assertIn(eid, found("四月发生了什么"))
+
+    def test_a_stated_cause_travels_with_the_memory(self):
+        self.remember("这周连续熬夜赶论文，每天只睡四小时", "2026-09-01T10:00:00Z", lambda p: episode_answer(p, "你这周连续熬夜赶论文，每天只睡四小时。"))
+        cause = self.memory.store.episodes()[0]["episode_id"]
+        self.remember("面试没发挥好，都怪这周没睡好", "2026-09-03T10:00:00Z",
+                      lambda p: episode_answer(p, "你面试没发挥好，说都怪这周没睡好。") | {"relations": [{"type": "because_of", "target_kind": "episode", "target_id": cause}]})
+        effect = next(e["episode_id"] for e in self.memory.store.episodes() if e["episode_id"] != cause)
+        view = self.memory.read.expand_episode(effect)["episode"]
+        self.assertEqual([(c["role"], c["episode_id"]) for c in view["causal"]], [("because", cause)])
+        self.assertEqual([(c["role"], c["episode_id"]) for c in self.memory.read.expand_episode(cause)["episode"]["causal"]], [("led_to", effect)])
+        self.remember("又没睡好", "2026-09-05T10:00:00Z",
+                      lambda p: episode_answer(p, "你又没睡好。") | {"relations": [{"type": "because_of", "target_kind": "episode", "target_id": "episode_nope"}]})
+        self.assertIn("QUARANTINE", [r["status"] for r in self.memory.store.all("SELECT status FROM candidates")], "a made-up cause is refused")

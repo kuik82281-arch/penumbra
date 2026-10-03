@@ -39,3 +39,23 @@ class MistakesTest(Base):
         self.assertIn("没出现「橙色」", rows["橙色"]["last_detail"])
         with self.assertRaises(Invalid):
             mistakes.add(self.memory.store, {"query": "随便"})
+
+
+class ProfileTest(Base):
+    def test_a_profile_is_written_when_its_memories_change_and_travels_with_the_name(self):
+        names.save(self.memory.store, {"name": "年糕", "aliases": ["糕糕"], "kind": "宠物"})
+        self.note("年糕是你去年领养的橘猫，三岁。", importance=0.6)
+        calls = []
+
+        def decide(payload):
+            calls.append(payload)
+            return {"profile": "年糕是你领养的橘猫，三岁，最近肠胃不好。"}
+        self.deepseek.decide = decide
+        ident = names.all_names(self.memory.store)[0]["name_id"]
+        self.assertTrue(names.write_profile(self.memory.store, self.memory.verifier.client, ident).get("skipped"), "one memory is not enough")
+        self.note("糕糕今天吐了两次，兽医说是肠胃炎。", importance=0.6)
+        self.assertEqual(names.refresh_profiles(self.memory.store, self.memory.verifier.client), [ident])
+        self.assertEqual(len(calls[0]["memories"]), 2, "both memories, under either of its names")
+        self.assertEqual(names.refresh_profiles(self.memory.store, self.memory.verifier.client), [], "nothing changed: no new call")
+        found = self.memory.read.retrieve({"query": "糕糕最近怎么样", "dry": True})
+        self.assertEqual(found["profiles"], [{"name": "年糕", "profile": "年糕是你领养的橘猫，三岁，最近肠胃不好。"}])

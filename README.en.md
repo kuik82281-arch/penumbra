@@ -30,6 +30,8 @@ Companion-style conversations break assumptions most memory layers make:
 | Conversation-shaped segments | 30 minutes of silence ends a segment; a resumed topic carries the tail of the previous one |
 | Only what is new | the LLM judges against existing memory: progress, a new detail, a first time, a deviation; routines keep one memory that accumulates evidence |
 | Three structures | Episode (one event), Pattern (a long-term state and its history), Thread (a multi-conversation story, written up when it ends) |
+| Cause and names | causes the source states outright link two episodes, and recalling one brings the other along; every name in the user's list has a neutral profile kept in step with its memories |
+| Two clocks | "what did we talk about in May" matches when things were said; "what happened in May" matches when they happened |
 | Memory kinds | experience, commitment / vow, shared vocabulary (nicknames, in-jokes), routine, dream (labelled non-factual) |
 | Verifiable | quotes checked verbatim against the source; change vs. correction; deletions leave tombstones; every change is versioned and audited |
 | Restrained recall | entry gate (small talk does not search) · lexical + vector + entity fusion · time-expression parsing · user-curated names · cooldown and de-duplication · cross-encoder re-check · at most two memories per turn |

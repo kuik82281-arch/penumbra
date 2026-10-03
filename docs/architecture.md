@@ -12,6 +12,8 @@ the background, and a **recall path** that runs once per conversation turn.
 | **Original** | one chat message (or an attachment / a note), with provenance | append-only; an identical resend is idempotent, a changed text is refused |
 | **Episode** | one concrete thing that happened, two to four sentences, citing the originals it came from | versioned updates; deletion leaves a tombstone |
 | **Pattern** | a long-term state of one subject: current state, earlier states with validity ranges, supporting episodes | versioned; a *change* appends history, a *correction* replaces the wrong state without keeping it |
+| **Relation** | `because_of` between two episodes, only when the source states the cause outright; recalled episodes carry their causes and effects one step away | added by curation, validated against existing ids |
+| **Name** | a user-curated name with aliases and a short neutral profile, rewritten by the LLM when the memories that mention it change | user-owned list; profile maintained in the background |
 | **Thread** | a story across conversations (an exam season, a job hunt): episodes in time order, written up as a narrative once closed | links are `auto` (confidence ≥ 0.85), `pending` (the user decides) or `rejected` (remembered, never re-proposed) |
 
 Episode kinds: experience, `commitment` (open → done / cancelled / missed, then it sinks), `vow` (never sinks),
@@ -43,8 +45,10 @@ again in the same turn.
 
 1. **Entry gate** (host side): greetings, routine words, bare emoji and very short messages do not search; a question
    about the past always does; a message with a picture always does, with the picture's description in the query.
-2. **Query understanding.** Time expressions (`5月底`, `上个月初`, `三个月前`) become date windows; stop words, and bigrams
-   that only exist because they straddle a stop word, are dropped.
+2. **Query understanding.** Time expressions (`5月底`, `上个月初`, `三个月前`) become date windows. A question about
+   talking ("上个月我们聊过什么") matches the window against when the source messages were written; any other question
+   against when the event happened, so "I said in February that I'd go in April" is found by February-said and April-happened,
+   not by February-happened. Stop words, and bigrams that only exist because they straddle a stop word, are dropped.
 3. **Hybrid retrieval.** BM25 over title / tag / entity / content fields, dense vectors (bge-m3), and entity matching,
    fused by reciprocal rank. The user's **name list** (`memory/names.py`) turns any alias into a precise hit.
 4. **Gates.** Per-hit thresholds (term coverage, vector similarity and margin); patterns first (an episode hit stands for
@@ -52,7 +56,8 @@ again in the same turn.
    the user asks about the past or names something); de-duplication against what the session context already carries;
    a **cross-encoder** re-check when the order is ambiguous or the evidence is meaning-only.
 5. **Delivery.** At most two memories, patterns first with their supporting episodes, each with its thread position
-   (the step before and after) and its attached images by reference.
+   (the step before and after), its causes and effects one step away, and its attached images by reference. A named
+   entity's profile comes first and does not count toward the two.
 
 ## Review
 

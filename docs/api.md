@@ -28,5 +28,5 @@ Local only (`127.0.0.1`), JSON in and out. The complete list is in the docstring
 | `POST /memory-core/edit` | user edits: delete (tombstoned), correct, convert a commitment, move an attachment |
 | `POST /memory-core/review/<candidate>` | resolve a quarantined decision |
 | `GET /memory-core/threads`, `POST /memory-core/threads/decide`, `POST /memory-core/threads/story/<id>` | story threads |
-| `GET/POST /memory-core/names`, `POST /memory-core/names/delete` | the name list |
+| `GET/POST /memory-core/names`, `POST /memory-core/names/delete`, `POST /memory-core/names/<id>/profile` | the name list and its profiles |
 | `GET/POST /memory-core/mistakes`, `POST /memory-core/mistakes/run`, `POST /memory-core/mistakes/delete` | the mistake set |

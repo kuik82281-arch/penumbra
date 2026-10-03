@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "penumbra-memory"
+version = "0.1.0"
+description = "A memory service for long-running AI companions: verbatim originals, curated episodes, patterns and story threads, restrained recall."
+readme = "README.en.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+models = ["torch>=2.1", "transformers>=4.40"]
+dev = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/kuik82281-arch/penumbra"
+
+[tool.setuptools.packages.find]
+include = ["penumbra*"]
+
+[tool.setuptools.package-data]
+penumbra = ["prompts/default/*.md"]

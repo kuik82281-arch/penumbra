@@ -1,0 +1,17 @@
+# Runtime data: originals, memories, indexes - never committed.
+data/
+# A deployment's own prompts.
+penumbra/prompts/private/
+# Local model weights.
+models/
+# Evaluation state and reports are regenerated.
+eval/state/
+eval/reports/
+eval/last-run.log
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/

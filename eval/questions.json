@@ -1,0 +1,611 @@
+{
+ "about": "Questions over eval/corpus.json. expect: groups of words, every group must be met by at least one of its words somewhere in the top memories; must_not: none of these may appear there. layer2_only: only meaningful when the AI answers (abstention).",
+ "top_k": 5,
+ "questions": [
+  {
+   "id": "single-1",
+   "category": "单件事",
+   "q": "我上次让你买的冰淇淋是什么味的？",
+   "expect": [
+    [
+     "草莓"
+    ]
+   ]
+  },
+  {
+   "id": "single-2",
+   "category": "单件事",
+   "q": "我驾照考到哪一步了？",
+   "expect": [
+    [
+     "科目一"
+    ]
+   ]
+  },
+  {
+   "id": "change-1",
+   "category": "变化",
+   "q": "我现在还讨厌香菜吗？",
+   "expect": [
+    [
+     "香菜"
+    ],
+    [
+     "喜欢",
+     "火锅"
+    ]
+   ]
+  },
+  {
+   "id": "correct-1",
+   "category": "纠错",
+   "q": "我最喜欢什么颜色？",
+   "expect": [
+    [
+     "薄荷绿"
+    ]
+   ],
+   "must_not": [
+    "现在最喜欢蓝色",
+    "当前状态：你最喜欢蓝色"
+   ]
+  },
+  {
+   "id": "lex-1",
+   "category": "我们的词",
+   "q": "芜湖起飞是什么意思？",
+   "expect": [
+    [
+     "芜湖起飞"
+    ],
+    [
+     "开心"
+    ]
+   ]
+  },
+  {
+   "id": "lex-2",
+   "category": "我们的词",
+   "q": "你应该怎么叫我？",
+   "expect": [
+    [
+     "小太阳"
+    ]
+   ]
+  },
+  {
+   "id": "lex-3",
+   "category": "我们的词",
+   "q": "我说电量不足的时候你该做什么？",
+   "expect": [
+    [
+     "电量不足"
+    ],
+    [
+     "陪",
+     "聊"
+    ]
+   ]
+  },
+  {
+   "id": "commit-1",
+   "category": "承诺",
+   "q": "我答应给你发的照片发了吗？",
+   "expect": [
+    [
+     "发型",
+     "头发"
+    ]
+   ]
+  },
+  {
+   "id": "vow-1",
+   "category": "承诺",
+   "q": "我们跨年的时候说好了什么？",
+   "expect": [
+    [
+     "烟花"
+    ]
+   ]
+  },
+  {
+   "id": "story-1",
+   "category": "跨好几次",
+   "q": "我找工作那段时间都发生了什么？",
+   "expect": [
+    [
+     "星屿"
+    ],
+    [
+     "offer",
+     "录用",
+     "入职"
+    ],
+    [
+     "面"
+    ]
+   ]
+  },
+  {
+   "id": "story-2",
+   "category": "跨好几次",
+   "q": "我一面的时候哪个问题没答好？",
+   "expect": [
+    [
+     "协程"
+    ]
+   ]
+  },
+  {
+   "id": "time-1",
+   "category": "时间",
+   "q": "二月底我们聊过什么？",
+   "expect": [
+    [
+     "大理"
+    ]
+   ]
+  },
+  {
+   "id": "time-2",
+   "category": "时间",
+   "q": "十一月底我收到了什么好消息？",
+   "expect": [
+    [
+     "offer",
+     "录用"
+    ]
+   ]
+  },
+  {
+   "id": "link-1",
+   "category": "接上一段",
+   "q": "年糕后来怎么样了？",
+   "expect": [
+    [
+     "年糕"
+    ],
+    [
+     "肠胃炎"
+    ]
+   ]
+  },
+  {
+   "id": "deleted-1",
+   "category": "已删除",
+   "q": "我手机掉进哪里了？",
+   "expect": [],
+   "must_not": [
+    "马桶"
+   ]
+  },
+  {
+   "id": "k-progress",
+   "category": "知识",
+   "q": "我高数现在学到哪一部分了？",
+   "expect": [
+    [
+     "多元",
+     "偏导"
+    ]
+   ]
+  },
+  {
+   "id": "k-change",
+   "category": "知识",
+   "q": "ε-δ那个定义我现在懂了吗？",
+   "expect": [
+    [
+     "ε",
+     "δ"
+    ],
+    [
+     "懂",
+     "证明"
+    ]
+   ]
+  },
+  {
+   "id": "k-mistake",
+   "category": "知识",
+   "q": "我用洛必达的时候犯过什么错？",
+   "expect": [
+    [
+     "洛必达"
+    ],
+    [
+     "0/0",
+     "零比零",
+     "类型"
+    ]
+   ]
+  },
+  {
+   "id": "k-mixup",
+   "category": "知识",
+   "q": "泰勒展开我哪几个老记不住？",
+   "expect": [
+    [
+     "e^x",
+     "ln"
+    ]
+   ]
+  },
+  {
+   "id": "k-score",
+   "category": "知识",
+   "q": "我期中高数考了多少分，丢分在哪？",
+   "expect": [
+    [
+     "82"
+    ],
+    [
+     "分部积分"
+    ]
+   ]
+  },
+  {
+   "id": "k-weak",
+   "category": "知识",
+   "q": "我高数最薄弱的地方是什么？",
+   "expect": [
+    [
+     "分部积分",
+     "二阶常系数",
+     "全微分",
+     "记混"
+    ]
+   ]
+  },
+  {
+   "id": "k-final",
+   "category": "知识",
+   "q": "期末那道没做出来的是什么题？",
+   "expect": [
+    [
+     "二阶常系数",
+     "重根"
+    ]
+   ]
+  },
+  {
+   "id": "k-unclear",
+   "category": "知识",
+   "q": "全微分我搞懂了吗？",
+   "expect": [
+    [
+     "全微分"
+    ],
+    [
+     "模糊",
+     "不清楚",
+     "还没"
+    ]
+   ]
+  },
+  {
+   "id": "none-1",
+   "category": "不该找到",
+   "q": "今天天气怎么样？",
+   "expect_none": true
+  },
+  {
+   "id": "none-2",
+   "category": "不该找到",
+   "q": "晚上吃什么好呢？",
+   "expect_none": true
+  },
+  {
+   "id": "none-3",
+   "category": "不该找到",
+   "q": "我上个月去巴黎玩得开心吗？",
+   "expect_none": true
+  },
+  {
+   "id": "none-4",
+   "category": "不该找到",
+   "q": "我们养的狗叫什么名字？",
+   "expect_none": true
+  },
+  {
+   "id": "none-5",
+   "category": "不该找到",
+   "q": "明天几点起床？",
+   "expect_none": true
+  },
+  {
+   "id": "none-6",
+   "category": "不该找到",
+   "q": "你爱我吗？",
+   "expect_none": true
+  },
+  {
+   "id": "none-7",
+   "category": "不该找到",
+   "q": "你还记得我们第一次见面吗？",
+   "expect_none": true
+  },
+  {
+   "id": "p-craft",
+   "category": "在推进的事",
+   "q": "我给朋友做的那个手工做好了吗？",
+   "expect": [
+    [
+     "钥匙扣",
+     "小猫"
+    ],
+    [
+     "做好",
+     "送"
+    ]
+   ]
+  },
+  {
+   "id": "p-clean",
+   "category": "在推进的事",
+   "q": "我上次大扫除都打扫了哪些地方？",
+   "expect": [
+    [
+     "厨房"
+    ],
+    [
+     "卫生间"
+    ],
+    [
+     "卧室"
+    ]
+   ]
+  },
+  {
+   "id": "p-clean-done",
+   "category": "在推进的事",
+   "q": "那次大扫除做完了吗？",
+   "expect": [
+    [
+     "打扫完",
+     "完成",
+     "做完"
+    ]
+   ]
+  },
+  {
+   "id": "p-earring",
+   "category": "在推进的事",
+   "q": "我丢的那只耳环是在哪找到的？",
+   "expect": [
+    [
+     "洗衣机"
+    ]
+   ]
+  },
+  {
+   "id": "p-novel",
+   "category": "在推进的事",
+   "q": "我的小说写到哪了？",
+   "expect": [
+    [
+     "第十二章",
+     "第12章",
+     "12章"
+    ]
+   ]
+  },
+  {
+   "id": "p-novel-stuck",
+   "category": "在推进的事",
+   "q": "我写小说卡在哪过，后来怎么想通的？",
+   "expect": [
+    [
+     "动机"
+    ],
+    [
+     "妹妹"
+    ]
+   ]
+  },
+  {
+   "id": "p-gym",
+   "category": "在推进的事",
+   "q": "我健身坚持得怎么样？",
+   "expect": [
+    [
+     "健身"
+    ],
+    [
+     "50"
+    ]
+   ]
+  },
+  {
+   "id": "p-gym-break",
+   "category": "在推进的事",
+   "q": "我健身中间断过吗？",
+   "expect": [
+    [
+     "两周",
+     "断"
+    ]
+   ]
+  },
+  {
+   "id": "study-day-1",
+   "category": "在推进的事",
+   "q": "全微分和偏导数是什么关系，我是哪天想通的？",
+   "expect": [
+    [
+     "可微"
+    ],
+    [
+     "偏导"
+    ]
+   ]
+  },
+  {
+   "id": "study-day-2",
+   "category": "在推进的事",
+   "q": "我做全微分的题错在哪了？",
+   "expect": [
+    [
+     "链式法则"
+    ]
+   ]
+  },
+  {
+   "id": "ritual-1",
+   "category": "日常",
+   "q": "我们睡前一般怎么样？",
+   "expect": [
+    [
+     "打卡"
+    ],
+    [
+     "晚安",
+     "收到"
+    ]
+   ]
+  },
+  {
+   "id": "ritual-2",
+   "category": "日常",
+   "q": "有一晚我想听你唱什么歌？",
+   "expect": [
+    [
+     "小星星"
+    ]
+   ]
+  },
+  {
+   "id": "meal-1",
+   "category": "日常",
+   "q": "我最近最爱吃哪家？",
+   "expect": [
+    [
+     "兰州拉面",
+     "拉面"
+    ]
+   ]
+  }
+ ],
+ "structure": [
+  {
+   "id": "thread-job",
+   "check": "a story thread holds the job hunt",
+   "thread_with": [
+    "星屿"
+   ],
+   "min_steps": 3,
+   "thread_without": [
+    "科目一"
+   ]
+  },
+  {
+   "id": "noise",
+   "check": "chit-chat did not become a memory",
+   "no_episode_with_only": [
+    "早安",
+    "包子"
+   ]
+  },
+  {
+   "id": "lexicon-kind",
+   "check": "the three words are kept as 我们的词",
+   "lexicon_tags": [
+    "芜湖起飞",
+    "小太阳",
+    "电量不足"
+   ]
+  },
+  {
+   "id": "study-pattern",
+   "check": "a long-term Pattern follows how her calculus is going",
+   "pattern_with": [
+    "高数",
+    "极限",
+    "ε"
+   ]
+  },
+  {
+   "id": "novel-pattern",
+   "check": "a long-term Pattern follows the novel",
+   "pattern_with": [
+    "雾港",
+    "小说"
+   ]
+  },
+  {
+   "id": "cleaning-closed",
+   "check": "the week of cleaning is a thread, closed when she said it was done",
+   "thread_with": [
+    "厨房",
+    "卧室"
+   ],
+   "min_steps": 2,
+   "thread_closed": true
+  },
+  {
+   "id": "study-days",
+   "check": "four study days in a row are four steps (none dropped as a repeat)",
+   "episodes_with": [
+    "全微分",
+    "可微",
+    "链式法则"
+   ],
+   "between": [
+    "2026-03-11",
+    "2026-03-14"
+   ],
+   "min": 4
+  },
+  {
+   "id": "ritual-one",
+   "check": "the goodnight ritual is one memory, not one per night",
+   "episodes_with": [
+    "打卡"
+   ],
+   "between": [
+    "2026-03-15",
+    "2026-03-19"
+   ],
+   "exclude": [
+    "小星星"
+   ],
+   "max": 1
+  },
+  {
+   "id": "ritual-special",
+   "check": "the night she wanted 《小星星》 is its own memory, not a ritual",
+   "episodes_with": [
+    "小星星"
+   ],
+   "min": 1,
+   "not_kind": "ritual"
+  },
+  {
+   "id": "meals-nothing",
+   "check": "ordinary meals did not become memories",
+   "no_episode_with_only": [
+    "麻辣烫",
+    "煎饺",
+    "寿司",
+    "沙拉"
+   ]
+  },
+  {
+   "id": "meal-noodles",
+   "check": "the noodle place she loves is remembered",
+   "episodes_or_patterns_with": [
+    "兰州拉面",
+    "拉面"
+   ],
+   "min": 1
+  },
+  {
+   "id": "ritual-kind",
+   "check": "one bedtime ritual, without the 《小星星》 night in it",
+   "ritual_tag": "睡前",
+   "ritual_without": [
+    "小星星"
+   ]
+  }
+ ]
+}

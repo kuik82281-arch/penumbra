@@ -1,0 +1,8 @@
+{
+ "user": "Mia",
+ "assistant": "Echo",
+ "user_pronoun": "她",
+ "assistant_pronoun": "他",
+ "aliases": {"user": [], "assistant": []},
+ "preference_labels": []
+}

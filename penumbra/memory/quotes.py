@@ -42,10 +42,10 @@ def plan_texts(actions: list[dict]) -> list[str]:
     for a in actions:
         kind = a.get("action")
         if kind in ("CREATE_EPISODE", "MERGE_EPISODE"):
-            out += [a.get("content", ""), a.get("state", "")]
+            out += [a.get("content", ""), a.get("state", ""), a.get("excerpt", "")]
         elif kind == "UPDATE_EPISODE":
             patch = a.get("patch") or {}
-            out += [patch.get("content", ""), patch.get("state", "")]
+            out += [patch.get("content", ""), patch.get("state", ""), patch.get("excerpt", "")]
         elif kind == "CREATE_PATTERN":
             out += [a.get("narrative", ""), a.get("current_state", ""), *[s.get("state", "") for s in a.get("earlier_states") or []]]
         elif kind == "UPDATE_PATTERN":

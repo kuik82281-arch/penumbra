@@ -14,7 +14,7 @@ from pathlib import Path
 from . import identity
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-NAMES = ("verify", "discover", "dream", "her_dream", "story")
+NAMES = ("verify", "discover", "dream", "her_dream", "story", "rewrite")
 
 
 @lru_cache(maxsize=None)

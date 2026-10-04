@@ -114,6 +114,8 @@ def edit(core, body: dict) -> dict:
                     change[key] = _strings(patch[key], key, limit)
             if "state" in patch:
                 change["state"] = clean_text(patch["state"], "state", 200, required=False)
+            if "excerpt" in patch:
+                change["excerpt"] = clean_text(patch["excerpt"], "excerpt", 120, required=False)
             if "importance" in patch:
                 change["importance"] = _unit(patch["importance"], "importance")
             if "source_raw_ids" in patch:

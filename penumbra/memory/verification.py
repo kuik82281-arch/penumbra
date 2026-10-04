@@ -44,7 +44,7 @@ def build_payload(candidate: dict, raw: list[dict], context: list[dict], pattern
                           "current_state": p["current_state"], "current_state_since": p["current_state_since"],
                           "historical_states": [{"state": s["state"], "valid_from": s["valid_from"], "valid_to": s["valid_to"]} for s in p["historical_states"]],
                           "supporting_episode_ids": p["supporting_episode_ids"]} for p in patterns],
-            "episodes": [{"episode_id": e["episode_id"], "content": e["content"], "time_start": e["time_start"], "time_end": e["time_end"],
+            "episodes": [{"episode_id": e["episode_id"], "excerpt": e.get("excerpt") or "", "content": e["content"], "time_start": e["time_start"], "time_end": e["time_end"],
                           "state": e["state"], "entities": e["entities"], "source_raw_ids": e["source_raw_ids"][:6], "kind": e.get("kind") or "", "tag": e.get("tag") or "",
                           "patterns": e.get("pattern_ids", [])} for e in episodes],
         },

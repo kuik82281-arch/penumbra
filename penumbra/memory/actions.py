@@ -155,6 +155,8 @@ def _episode_fields(raw: dict, allowed_raw: set[str], store: Store, require_all:
             out[key] = _strings(raw.get(key), key, limit)
     if require_all or "state" in raw:
         out["state"] = clean_text(raw.get("state") or "", "state", 200, required=False)
+    if require_all or "excerpt" in raw:
+        out["excerpt"] = clean_text(raw.get("excerpt") or "", "excerpt", 120, required=False)
     if require_all or "importance" in raw:
         out["importance"] = _unit(raw.get("importance"), "importance", 0.5)
     if require_all or "confidence" in raw:
@@ -503,12 +505,12 @@ def apply_plan(store: Store, plan: Plan, candidate_id: str | None, decision_id: 
                 same = a.get("kind") == "commitment" and next((e for e in store.episodes(status="active") if e.get("kind") == "commitment" and e.get("tag") == a["tag"]
                                                                and e.get("commit_status") in ("open", "missed")), None)
                 if same:
-                    patch = settle_commitment(same, {k: a[k] for k in ("content", "state", "due_at") if a.get(k)} | {"source_raw_ids": _union(same["source_raw_ids"], a["source_raw_ids"])}, now_iso())
+                    patch = settle_commitment(same, {k: a[k] for k in ("content", "state", "excerpt", "due_at") if a.get(k)} | {"source_raw_ids": _union(same["source_raw_ids"], a["source_raw_ids"])}, now_iso())
                     store.update_episode(same["episode_id"], patch, actor=actor, reason="same commitment again", decision_id=decision_id)
                     refs[a["ref"]] = same["episode_id"]
                     applied["episodes_updated"].append(same["episode_id"])
                     continue
-                doc = {k: a[k] for k in ("content", "time_start", "time_end", "entities", "topics", "state", "importance", "confidence", "source_raw_ids", "attachment_ids",
+                doc = {k: a[k] for k in ("content", "time_start", "time_end", "entities", "topics", "state", "excerpt", "importance", "confidence", "source_raw_ids", "attachment_ids",
                                          "kind", "tag", "owner", "due_at", "commit_status") if k in a}
                 ep = store.insert_episode({**doc, "relations": a.get("relations", []), "origin": "pipeline", "candidate_id": candidate_id, "decision_id": decision_id}, actor=actor, reason="CREATE_EPISODE")
                 refs[a["ref"]] = ep["episode_id"]
@@ -544,7 +546,7 @@ def apply_plan(store: Store, plan: Plan, candidate_id: str | None, decision_id: 
                 olds = [store.episode(i) for i in a["episode_ids"]]
                 sources = _union(*[e["source_raw_ids"] for e in olds], a["add_source_raw_ids"], [])
                 attachments = _union(*[e["attachment_ids"] for e in olds])
-                doc = {k: a[k] for k in ("content", "time_start", "time_end", "entities", "topics", "state", "importance", "confidence",
+                doc = {k: a[k] for k in ("content", "time_start", "time_end", "entities", "topics", "state", "excerpt", "importance", "confidence",
                                          "kind", "tag", "owner", "due_at", "commit_status") if k in a}
                 doc["time_start"] = min(doc["time_start"], *[e["time_start"] for e in olds])
                 doc["time_end"] = max(doc["time_end"], *[e["time_end"] for e in olds])

@@ -211,11 +211,14 @@ EPISODE_JSON = ("entities", "topics", "relations", "source_raw_ids", "attachment
 EPISODE_COMMITMENT_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT ''"), ("tag", "TEXT NOT NULL DEFAULT ''"), ("owner", "TEXT NOT NULL DEFAULT ''"),
                               ("due_at", "TEXT"), ("commit_status", "TEXT NOT NULL DEFAULT ''"), ("resolved_at", "TEXT"), ("missed_told_at", "TEXT"),
                               # kind 'dream': where the dream itself lives in the bridge ("dream:<id>"); the Episode is only its summary.
-                              ("source_ref", "TEXT NOT NULL DEFAULT ''"))
+                              ("source_ref", "TEXT NOT NULL DEFAULT ''"),
+                              # One line on what the Episode is and what it meant (精简唯美, names the thing): what threads, recall
+                              # in passing and the Memory Studio show first; content keeps the full account. '' on older Episodes.
+                              ("excerpt", "TEXT NOT NULL DEFAULT ''"))
 EPISODE_COLUMNS = ("episode_id", "content", "time_start", "time_end", "entities", "topics", "relations", "state", "importance", "confidence",
                    "source_raw_ids", "attachment_ids", "status", "superseded_by", "origin", "candidate_id", "decision_id", "created_at", "updated_at",
                    "version", *(name for name, _ in EPISODE_COMMITMENT_COLUMNS))
-EPISODE_DEFAULTS = {"kind": "", "tag": "", "owner": "", "due_at": None, "commit_status": "", "resolved_at": None, "missed_told_at": None, "source_ref": ""}
+EPISODE_DEFAULTS = {"kind": "", "tag": "", "owner": "", "due_at": None, "commit_status": "", "resolved_at": None, "missed_told_at": None, "source_ref": "", "excerpt": ""}
 PATTERN_JSON = ("states", "supporting_episode_ids", "entities")
 
 

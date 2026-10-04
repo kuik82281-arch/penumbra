@@ -10,7 +10,7 @@ the background, and a **recall path** that runs once per conversation turn.
 | Layer | What it is | Mutability |
 |---|---|---|
 | **Original** | one chat message (or an attachment / a note), with provenance | append-only; an identical resend is idempotent, a changed text is refused |
-| **Episode** | one concrete thing that happened, two to four sentences, citing the originals it came from | versioned updates; deletion leaves a tombstone |
+| **Episode** | one concrete thing that happened, two to four sentences, citing the originals it came from, with a one-line excerpt | versioned updates; deletion leaves a tombstone |
 | **Pattern** | a long-term state of one subject: current state, earlier states with validity ranges, supporting episodes | versioned; a *change* appends history, a *correction* replaces the wrong state without keeping it |
 | **Relation** | `because_of` between two episodes, only when the source states the cause outright; recalled episodes carry their causes and effects one step away | added by curation, validated against existing ids |
 | **Name** | a user-curated name with aliases and a short neutral profile, rewritten by the LLM when the memories that mention it change | user-owned list; profile maintained in the background |
@@ -45,7 +45,8 @@ again in the same turn.
 
 1. **Entry gate** (host side): greetings, routine words, bare emoji and very short messages do not search; a question
    about the past always does; a message with a picture always does, with the picture's description in the query.
-2. **Query understanding.** Time expressions (`5月底`, `上个月初`, `三个月前`) become date windows. A question about
+2. **Query understanding.** A message that points back (那个, 这块, 它 ...) is searched once more with the two lines
+   before it, and the two searches are fused (found by both rises; found only with the context is discounted). Time expressions (`5月底`, `上个月初`, `三个月前`) become date windows. A question about
    talking ("上个月我们聊过什么") matches the window against when the source messages were written; any other question
    against when the event happened, so "I said in February that I'd go in April" is found by February-said and April-happened,
    not by February-happened. Stop words, and bigrams that only exist because they straddle a stop word, are dropped.

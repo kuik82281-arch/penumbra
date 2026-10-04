@@ -30,6 +30,8 @@ from ..retrieval import RetrievalRequest, RetrievalCore
 from .store import dumps, mint, now_iso
 from . import names as names_module
 from . import threads as threads_module
+from . import rewrite as rewrite_module
+from .rewrite import QueryRewriter
 
 INJECT_TOP = 12
 MAX_PATTERNS = 2
@@ -86,7 +88,12 @@ class BGEReranker:
                 "enabled": self.enabled, "error": self.error, "lastMs": self.last_ms}
 
     def _load(self) -> None:
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        try:
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        except ImportError:
+            # transformers imports lazily: a first import racing another thread's (the embedding model loading) can fail once.
+            time.sleep(0.5)
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         if self.model is None:
             self.tokenizer = AutoTokenizer.from_pretrained(self.path, local_files_only=True)
@@ -272,12 +279,35 @@ def _date_in(stamp: str | None, window: dict) -> bool:
 COMMIT_WORDS = {"open": "未完成", "done": "已完成", "missed": "没做到", "cancelled": "已取消"}
 
 
+# Fusing the original search with the rewritten one: found by both is surer; found only through the rewrite has to be
+# strong on its own (a wrong rewrite should not push its finds in); found only by the original keeps its score.
+BOTH_BOOST = 1.15
+REWRITE_ONLY = 0.85
+
+
+def _fuse(original: list[dict], rewritten: list[dict]) -> tuple[list[dict], dict]:
+    by_id = {h["hitId"]: dict(h) for h in original}
+    both = only = 0
+    for h in rewritten:
+        if h["hitId"] in by_id:
+            mine = by_id[h["hitId"]]
+            mine["score"] = round(max(mine["score"], h["score"]) * BOTH_BOOST, 4)
+            mine.setdefault("signals", {})["rewrite"] = True
+            both += 1
+        else:
+            by_id[h["hitId"]] = {**h, "score": round(h["score"] * REWRITE_ONLY, 4), "signals": {**(h.get("signals") or {}), "rewrite_only": True}}
+            only += 1
+    fused = sorted(by_id.values(), key=lambda h: -h["score"])
+    return fused, {"both": both, "rewrite_only": only}
+
+
 class MemoryRead:
     def __init__(self, core):
         self.core = core
         self.store = core.store
         self.svc = core.service
         self.reranker = BGEReranker()
+        self.rewriter = QueryRewriter()
 
     # ------------------------------------------------------------ projection into the retrieval index
 
@@ -296,8 +326,9 @@ class MemoryRead:
 
     @staticmethod
     def _episode_memory(e: dict, thread_tags: list[str] | None = None) -> tuple[files.Memory, dict]:
+        # Search reads the full account (its concrete words find it); the excerpt is for reading, so it only trails the body.
         title = re.split(r"[。！？\n]", e["content"])[0][:40] or e["content"][:40]
-        body = e["content"] + (f"\n状态：{e['state']}" if e["state"] else "")
+        body = e["content"] + (f"\n状态：{e['state']}" if e["state"] else "") + (f"\n{e['excerpt']}" if e.get("excerpt") else "")
         if e.get("kind") == "dream":  # a dream is found like any memory, but never mistaken for something that happened
             hers = identity.is_user(e.get("owner"))  # the user's own dream, told to the assistant
             title = f"（{identity.current().user_pronoun + '的梦' if hers else '梦'}）{title}"
@@ -391,7 +422,7 @@ class MemoryRead:
 
     @staticmethod
     def episode_view(e: dict) -> dict:
-        return {"episode_id": e["episode_id"], "content": e["content"], "time_start": e["time_start"], "time_end": e["time_end"], "entities": e["entities"], "topics": e["topics"],
+        return {"episode_id": e["episode_id"], "excerpt": e.get("excerpt") or "", "content": e["content"], "time_start": e["time_start"], "time_end": e["time_end"], "entities": e["entities"], "topics": e["topics"],
                 "state": e["state"], "importance": e["importance"], "confidence": e["confidence"], "source_raw_ids": e["source_raw_ids"], "attachment_ids": e["attachment_ids"],
                 "version": e["version"], "status": e["status"], "kind": e.get("kind") or "", "tag": e.get("tag") or "", "commit_status": e.get("commit_status") or "",
                 "source_ref": e.get("source_ref") or "", "owner": e.get("owner") or ""}
@@ -447,7 +478,7 @@ class MemoryRead:
             except NotFound:
                 continue
             if e["status"] == "active":
-                out.append({"role": role, "episode_id": other, "time": e["time_start"], "content": e["content"][:120]})
+                out.append({"role": role, "episode_id": other, "time": e["time_start"], "content": threads_module.gist(e)})
         return out[:limit]
 
     # ------------------------------------------------------------ seen suppression (per Claude session, by version)
@@ -541,6 +572,35 @@ class MemoryRead:
         hits = list(found["hits"])
         stages.append({"stage": "engine", "signals": found["summary"]["signals"], "vector": found["summary"]["vector"], "candidates": len(found["scored"]), "kept": len(hits),
                        "belowThreshold": len(found["debug"]["belowThreshold"]), "deduped": len(found["dropped"]), "timings": found["debug"]["timings"]})
+        # --- Rewrite: the same search again with what she means ("那个后来怎么样了" -> its topic), fused with the original
+        rewrite_mode = rewrite_module.mode() if body.get("rewrite") is not False else "off"
+        rewritten = self.rewriter.rewrite(query, recent) if rewrite_mode in ("on", "shadow") else None
+        meaning = search_text  # what the cross-encoder, names and rescue read
+        if rewrite_mode == "context":
+            # No model: a message that points back ("那个", "它", "这块") searches once more with the two lines before it,
+            # fused with the original - a clear message (no such word) searches exactly as it always did.
+            lines = [str(r.get("content") or "") for r in recent[-2:] if r.get("content")]
+            if lines and search_text == query and rewrite_module.REFERENT.search(query):
+                context = " ".join(lines)[:400]
+                again = self._engine(f"{context} {query}", policy=policy, top_k=INJECT_TOP, conversation_id=conversation_id, session_id=session_id)
+                hits, fused = _fuse(hits, list(again["hits"]))
+                meaning = f"{context} {query}"
+                stages.append({"stage": "rewrite", "mode": "context", "referent": rewrite_module.REFERENT.search(query).group(0), "kept": len(again["hits"]), **fused})
+        elif rewritten:
+            stage = {"stage": "rewrite", "mode": rewrite_mode, "topic": rewritten["topic"], "keywords": rewritten["keywords"], "image": rewritten["image"],
+                     "latency_ms": rewritten["latency_ms"]}
+            # Only a rewrite that adds something (a resolved 那个, a word from the lines before) is used: one that merely repeats
+            # her own words changes nothing but the order, so a clear message searches exactly as it always did.
+            adds = any(k not in query for k in rewritten["keywords"]) or len(set(rewritten["topic"]) - set(query) - set(" ，。？！")) >= 2
+            stage["adds"] = adds
+            if rewrite_mode == "on" and adds and rewritten["text"] and rewritten["text"] != search_text:
+                again = self._engine(rewritten["text"], policy=policy, top_k=INJECT_TOP, conversation_id=conversation_id, session_id=session_id)
+                hits, fused = _fuse(hits, list(again["hits"]))
+                meaning = f"{rewritten['topic']} {query}".strip()
+                stage.update(kept=len(again["hits"]), **fused)
+            stages.append(stage)
+        elif rewrite_mode != "off":
+            stages.append({"stage": "rewrite", "mode": rewrite_mode, "skipped": "no rewrite (model unavailable, slow or empty)"})
         # --- Time signal: a boost inside the named window; a purely temporal question also gets that window's own Episodes
         pure_time = False
         if window:
@@ -578,7 +638,7 @@ class MemoryRead:
             hits.sort(key=lambda h: -h["score"])
             stages.append({"stage": "time", "window": window, "boosted": boosted, "added": len(added)})
         # --- Names: what she names from her 专名库 is a precise hit, under any of its names
-        named = names_module.mentioned(self.store, query)
+        named = names_module.mentioned(self.store, meaning if meaning != search_text else query)
         profiles: list[dict] = []
         if named:
             words = [w for n in named for w in n["words"]]
@@ -607,7 +667,7 @@ class MemoryRead:
             profiles = [{"name": n["name"], "profile": n["profile"]} for n in named if n.get("profile")]
         # --- Rescue: a question that found nothing - its nearest memories by meaning, kept only if the cross-encoder agrees
         if not pure_time and not hits and QUESTION.search(query):
-            rescued = self._rescue(search_text)
+            rescued = self._rescue(meaning)
             hits.extend(rescued)
             stages.append({"stage": "rescue", "added": [h["hitId"] for h in rescued]})
         # --- Pattern first: an Episode hit stands for the Patterns it supports; orphan Episodes stay episodes
@@ -678,7 +738,7 @@ class MemoryRead:
                         docs.append(f"{p['title']}\n{p['narrative'][:300]}\n当前状态：{p['current_state']}")
                     else:
                         docs.append(self.store.episode(ident)["content"][:400])
-                scores = self.reranker.scores(search_text, docs)
+                scores = self.reranker.scores(meaning, docs)
                 if scores is None:
                     rerank["error"] = self.reranker.error or "reranker unavailable"
                 else:

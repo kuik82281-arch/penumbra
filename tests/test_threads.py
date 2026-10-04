@@ -97,3 +97,41 @@ class ThreadTest(Base):
         d = self.remember("高数作业", "2026-09-06T10:00:00Z", "9月6日，你做完了高数作业。",
                           lambda p: {"new_title": "你的高数", "with_episode_ids": [c], "confidence": 0.9})
         self.assertEqual(len([t for t in threads.overview(self.memory.store) if t["title"] == "你的高数"]), 1)
+
+
+class ExcerptTest(Base):
+    """Every Episode carries a one-line excerpt: threads are judged and walked by it, the full account stays in content."""
+
+    def remember_with(self, text, at, content, excerpt, thread=None):
+        self.raw(text, at=at)
+        self.ollama.answers = [CAND]
+
+        def decide(payload):
+            self.last_payload = payload
+            ep = episode_answer(payload, content) | {"excerpt": excerpt}
+            if thread:
+                ep["thread"] = thread(payload) if callable(thread) else thread
+            return wrap(ep)
+        self.deepseek.decide = decide
+        run_memory(self)
+        return next((e for e in self.memory.store.episodes() if e["content"] == content), None)
+
+    def test_threads_show_excerpts_and_neighbours_carry_them(self):
+        a = self.remember_with("投了三家公司的简历", "2026-09-01T10:00:00Z", "9月1日你投了三家公司，铺垫了很久才说最想去那家做游戏的。",
+                               "你投出了三份简历，心里最想要的是那家做游戏的。")
+        self.assertEqual(a["excerpt"], "你投出了三份简历，心里最想要的是那家做游戏的。")
+        b = self.remember_with("游戏公司约我一面了", "2026-09-05T10:00:00Z", "9月5日，你收到了游戏公司的一面邀请。", "游戏公司来了一面邀请，你离想要的近了一步。",
+                               lambda p: {"new_title": "找工作", "with_episode_ids": [a["episode_id"]], "confidence": 0.9, "reason": "同一次求职"})
+        self.remember_with("二面过了！", "2026-09-12T10:00:00Z", "9月12日，你二面过了。", "二面过了，你一连串的感叹号里全是光。",
+                           lambda p: {"thread_id": p["threads"][0]["thread_id"], "confidence": 0.95, "reason": "下一步"})
+        shown = self.last_payload["threads"][0]["latest"]
+        self.assertEqual(shown[-1]["excerpt"], "游戏公司来了一面邀请，你离想要的近了一步。", "the model judges the thread by excerpts")
+        line = threads.context_line(self.memory.store, b["episode_id"])[0]
+        self.assertEqual(line["before"]["content"], a["excerpt"], "recall walks the thread by excerpts")
+
+    def test_an_older_episode_without_an_excerpt_shows_the_start_of_its_content(self):
+        self.assertEqual(threads.gist({"excerpt": "", "content": "一" * 200}, 80), "一" * 80)
+
+    def test_a_made_up_quote_in_an_excerpt_is_refused(self):
+        made_up = self.remember_with("今天下雨了", "2026-09-02T10:00:00Z", "9月2日下雨了，你待在家里。", "你说“我最爱下雨天”，于是我们都没出门。")
+        self.assertIsNone(made_up, "an excerpt's quotes are checked like the content's")

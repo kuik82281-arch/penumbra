@@ -85,7 +85,7 @@ def evaluate(corpus: dict, questions: dict) -> dict:
                 results.append({**q, "status": "n/a"})
                 continue
             # The path his turns use: the memory reader (Patterns first, the time window, the gates), as a dry run.
-            found = svc.memory.read.retrieve({"query": q["q"], "turnId": f"eval-{q['id']}", "conversationId": "eval", "sessionId": "eval", "dry": True})
+            found = svc.memory.read.retrieve({"query": q["q"], "recent": q.get("recent") or [], "turnId": f"eval-{q['id']}", "conversationId": "eval", "sessionId": "eval", "dry": True})
             hits = [{"kind": "PATTERN", "hitId": p["pattern_id"], "content": f"{p['title']} {p.get('narrative', '')} {p['current_state']} "
                      + " ".join(e["content"] for e in p.get("matched_episodes") or [])} for p in found.get("patterns") or []]
             # What he sees for an Episode includes its story-thread line (the thread and the steps before / after).

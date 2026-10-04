@@ -23,6 +23,13 @@ from ..errors import Invalid, NotFound
 from .store import Store, mint, now_iso, parse_time
 
 AUTO_CONFIDENCE = 0.85
+
+
+def gist(episode: dict, limit: int = 120) -> str:
+    """A step of a thread as one line: its excerpt; an older Episode without one shows the start of its content."""
+    return (episode.get("excerpt") or "").strip() or episode["content"][:limit]
+
+
 QUIET_DAYS = 21
 CANDIDATE_THREADS = 6
 RECENT_DAYS = 10
@@ -120,7 +127,7 @@ def candidates_for(store: Store, related_episode_ids: list[str], now: str | None
         t = thread(store, tid)
         steps = links(store, tid)
         out.append({"thread_id": tid, "title": t["title"], "status": t["status"],
-                    "latest": [{"episode_id": s["episode_id"], "time": s["time_start"], "content": store.episode(s["episode_id"])["content"][:120]} for s in steps[-3:]]})
+                    "latest": [{"episode_id": s["episode_id"], "time": s["time_start"], "excerpt": gist(store.episode(s["episode_id"]))} for s in steps[-3:]]})
     out.sort(key=lambda t: t["status"] != "open")
     return out[:CANDIDATE_THREADS]
 
@@ -134,7 +141,7 @@ def overview(store: Store, now: datetime | None = None) -> list[dict]:
         steps = links(store, t["thread_id"], ("auto", "approved", "pending"))
         live = [s for s in steps if s["status"] in LIVE]
         last = max((s["time_start"] for s in live), default=t["created_at"])
-        t["steps"] = [{**s, "content": store.episode(s["episode_id"])["content"]} for s in steps]
+        t["steps"] = [{**s, "content": (ep := store.episode(s["episode_id"]))["content"], "excerpt": ep.get("excerpt") or ""} for s in steps]
         t["pending"] = sum(1 for s in steps if s["status"] == "pending")
         t["quiet"] = t["status"] == "open" and now - parse_time(last) > timedelta(days=QUIET_DAYS)
         out.append(t)
@@ -151,7 +158,7 @@ def context_line(store: Store, episode_id: str) -> list[dict]:
         if episode_id not in ids:
             continue
         i = ids.index(episode_id)
-        near = lambda j: ({"episode_id": ids[j], "time": steps[j]["time_start"], "content": store.episode(ids[j])["content"][:80]}  # noqa: E731
+        near = lambda j: ({"episode_id": ids[j], "time": steps[j]["time_start"], "content": gist(store.episode(ids[j]), 80)}  # noqa: E731
                           if 0 <= j < len(ids) else None)
         out.append({"thread_id": tid, "title": t["title"], "status": t["status"], "position": i + 1, "count": len(ids),
                     "before": near(i - 1), "after": near(i + 1), "has_story": bool(t["story"])})
@@ -263,7 +270,8 @@ def write_story(store: Store, client, thread_id: str) -> dict:
     steps = links(store, thread_id)
     if len(steps) < 2:
         raise Invalid("a story needs at least two Episodes")
-    payload = {"title": t["title"], "episodes": [{"time": s["time_start"], "content": store.episode(s["episode_id"])["content"]} for s in steps]}
+    # The excerpts carry the line of the story; the full accounts are there for its details.
+    payload = {"title": t["title"], "episodes": [{"time": s["time_start"], "excerpt": (ep := store.episode(s["episode_id"])).get("excerpt") or "", "content": ep["content"]} for s in steps]}
     answer, meta = client.chat_json(prompts.get("story"), json.dumps(payload, ensure_ascii=False), max_tokens=2500)
     story = str((answer or {}).get("story") or "").strip()
     if not story:

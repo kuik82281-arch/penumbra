@@ -484,6 +484,128 @@
      "拉面"
     ]
    ]
+  },
+  {
+   "id": "ref-1",
+   "category": "指代",
+   "q": "那个什么时候能写完啊",
+   "recent": [
+    {
+     "role": "user",
+     "content": "今天又写了一点"
+    },
+    {
+     "role": "assistant",
+     "content": "雾港写到哪一章了？"
+    }
+   ],
+   "expect": [
+    [
+     "六月",
+     "初稿"
+    ]
+   ]
+  },
+  {
+   "id": "ref-2",
+   "category": "指代",
+   "q": "那个最后怎么样了",
+   "recent": [
+    {
+     "role": "user",
+     "content": "突然想起之前找工作的时候"
+    },
+    {
+     "role": "assistant",
+     "content": "星屿那次面试？"
+    }
+   ],
+   "expect": [
+    [
+     "offer"
+    ]
+   ]
+  },
+  {
+   "id": "ref-3",
+   "category": "指代",
+   "q": "就是我自己做的那个，她天天挂着",
+   "recent": [
+    {
+     "role": "user",
+     "content": "我朋友今天又背着那个包来找我"
+    },
+    {
+     "role": "assistant",
+     "content": "包上挂着什么？"
+    }
+   ],
+   "expect": [
+    [
+     "钥匙扣"
+    ]
+   ]
+  },
+  {
+   "id": "ref-4",
+   "category": "指代",
+   "q": "这块我之前是不是老出错",
+   "recent": [
+    {
+     "role": "user",
+     "content": "今天在做全微分的题"
+    },
+    {
+     "role": "assistant",
+     "content": "复合函数求偏导那里？"
+    }
+   ],
+   "expect": [
+    [
+     "链式法则"
+    ]
+   ]
+  },
+  {
+   "id": "ref-5",
+   "category": "指代",
+   "q": "我的那个过了没来着",
+   "recent": [
+    {
+     "role": "user",
+     "content": "我室友今天去考驾照了"
+    },
+    {
+     "role": "assistant",
+     "content": "她考的哪一科？你自己的呢？"
+    }
+   ],
+   "expect": [
+    [
+     "科目一",
+     "98"
+    ]
+   ]
+  },
+  {
+   "id": "ref-6",
+   "category": "指代",
+   "q": "它还是那么好吃",
+   "recent": [
+    {
+     "role": "user",
+     "content": "今天中午又去学校后门了"
+    },
+    {
+     "role": "assistant",
+     "content": "又去吃那家面了？"
+    }
+   ],
+   "expect": [
+    [
+     "拉面"
+    ]
+   ]
   }
  ],
  "structure": [

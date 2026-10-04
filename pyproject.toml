@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "penumbra-memory"
-version = "0.1.0"
+version = "0.2.0"
 description = "A memory service for long-running AI companions: verbatim originals, curated episodes, patterns and story threads, restrained recall."
 readme = "README.en.md"
 license = { text = "AGPL-3.0-or-later" }

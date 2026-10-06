@@ -59,6 +59,17 @@ class SchedulerTest(Base):
         now = datetime.fromisoformat(activity.replace("Z", "+00:00")) + timedelta(minutes=minutes_after_activity)
         return self.memory.pipeline.tick(now=now, background=False)
 
+    def test_pipeline_status_says_whether_the_night_work_is_getting_done(self):
+        before = self.memory.route("GET", ["pipeline"])
+        self.assertTrue(before["enabled"])
+        self.assertFalse(before["busy"])
+        self.assertGreater(before["unprocessed_raw_count"], 0)
+        self.assertNotIn("last_success_at", before)
+        self.tick(31)  # a night run
+        after = self.memory.route("GET", ["pipeline"])
+        self.assertEqual(after["unprocessed_raw_count"], 0)
+        self.assertIn("last_success_at", after)
+
     def test_recent_activity_means_no_batch(self):
         for minutes in (0, 10, 29):
             result = self.tick(minutes)

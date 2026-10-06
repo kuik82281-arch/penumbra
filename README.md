@@ -57,6 +57,14 @@ Penumbra 是一个独立运行的本地 HTTP 服务。聊天程序把每一句�
 
 详细说明见 [docs/architecture.md](docs/architecture.md)。
 
+## 雨夜樱池
+
+<p align="center"><img src="docs/images/pond.jpg" width="100%" alt="雨夜樱池：樱花树下的池塘，每一片落在水面的花瓣都是一段记忆"></p>
+
+服务自带一个可视化页面：启动后打开 `http://127.0.0.1:8790/pond`。夜里下着雨，樱花落在池塘上，**每一段 Episode 都是水面上的一片花瓣**；
+点一下水面，光就落到那里，光下的花瓣会亮起来，点开一片就能读到那段经过。最近被想起过的花瓣会轻轻闪。
+页面只读同一个服务的 `GET /memory-core`，所以谁部署，看到的就是谁自己的记忆；three.js 从 CDN 加载。
+
 ## 快速开始
 
 ### Docker（推荐）

@@ -56,6 +56,15 @@ Companion-style conversations break assumptions most memory layers make:
 
 See [docs/architecture.md](docs/architecture.md).
 
+## The night pond
+
+<p align="center"><img src="docs/images/pond.jpg" width="100%" alt="The night pond: a pond under cherry trees, every petal on the water a memory"></p>
+
+The service ships a small visualization: start it and open `http://127.0.0.1:8790/pond`. It rains at night, cherry
+petals drift onto a pond, and **every Episode is a petal on the water**; tap the water and the light moves there, the
+petals under it brighten, and tapping one reads it. Recently recalled petals shimmer. The page only reads the service's
+own `GET /memory-core`, so it always shows the memory of whoever runs it; three.js comes from a CDN.
+
 ## Quick start
 
 ### Docker

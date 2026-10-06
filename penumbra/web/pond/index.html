@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Penumbra · 雨夜樱池</title>
+<!--
+  雨夜樱池 / the night pond: this service's memory as petals on a pond at night (scene.js). Every Episode is one petal
+  lying on the water; those under the beam brighten, and a tap reads one. Served by the service itself at /pond and
+  reading its own GET /memory-core, so it always shows the memory of whoever runs it. three.js comes from a CDN.
+-->
+<script type="importmap">
+  { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+      "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+  } }
+</script>
+<style>
+  html, body { margin: 0; height: 100%; background: #040406; overflow: hidden; }
+  body { color: #efe9df; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; user-select: none; -webkit-user-select: none; }
+  #pond { position: fixed; inset: 0; touch-action: none; }
+  #pond canvas { display: block; }
+  .round { position: fixed; z-index: 2; right: 14px; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 1px solid rgb(255 240 220 / 18%); border-radius: 50%; background: rgb(255 255 255 / 5%); color: rgb(239 233 223 / 55%); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); cursor: pointer; transition: background .4s, box-shadow .4s, color .4s; }
+  .round svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  #lamp { top: calc(env(safe-area-inset-top, 0px) + 12px); }
+  #wind { top: calc(env(safe-area-inset-top, 0px) + 62px); }
+  #lamp.on { color: #fff3dc; background: rgb(255 240 210 / 16%); box-shadow: 0 0 18px rgb(255 236 200 / 35%); }
+  #wind.on { color: #fde3ee; background: rgb(255 200 225 / 14%); box-shadow: 0 0 16px rgb(255 190 220 / 28%); }
+  .title { position: fixed; z-index: 2; top: calc(env(safe-area-inset-top, 0px) + 14px); left: 18px; margin: 0; font: italic 22px Georgia, serif; color: rgb(255 226 236 / 80%); text-shadow: 0 1px 3px rgb(0 0 0 / 75%), 0 0 16px rgb(0 0 0 / 55%); pointer-events: none; }
+  .title small { display: block; margin-top: 2px; font: 11px -apple-system, sans-serif; letter-spacing: .1em; color: rgb(255 226 236 / 50%); font-style: normal; }
+  #hint { position: fixed; z-index: 2; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 28px); margin: 0; transform: translateX(-50%); font-size: 12.5px; letter-spacing: .06em; color: rgb(255 240 220 / 55%); white-space: nowrap; pointer-events: none; transition: opacity 1.2s ease 1.2s; }
+  #hint.faded { opacity: 0; }
+  #card { position: fixed; z-index: 3; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); width: min(440px, calc(100% - 32px)); max-height: 42vh; overflow-y: auto; box-sizing: border-box; padding: 16px 18px 14px; border: 1px solid rgb(255 214 230 / 22%); border-radius: 18px; background: linear-gradient(160deg, rgb(46 30 42 / 80%), rgb(14 12 18 / 88%)); box-shadow: 0 10px 40px rgb(0 0 0 / 50%); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transform: translateX(-50%); user-select: text; -webkit-user-select: text; }
+  #card[hidden] { display: none; }
+  #card .close { position: absolute; top: 8px; right: 10px; width: 28px; height: 28px; padding: 0; border: 0; background: none; color: rgb(255 240 245 / 55%); font-size: 20px; cursor: pointer; }
+  #card .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 28px 6px 0; font-size: 11.5px; color: rgb(255 226 236 / 62%); }
+  #card .chip { padding: 1px 8px; border: 1px solid rgb(255 200 222 / 35%); border-radius: 999px; color: #ffd3e3; font-size: 10.5px; }
+  #card .topic { margin: 0 0 6px; font-size: 13px; color: #ffc9dc; }
+  #card .text { margin: 0; font-size: 14px; line-height: 1.75; color: #f8eef2; white-space: pre-wrap; }
+  #card .more { margin-top: 10px; padding: 0; border: 0; background: none; color: #ffc9dc; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+  #error { position: fixed; z-index: 2; left: 50%; top: 45%; transform: translateX(-50%); margin: 0; font-size: 13px; color: rgb(255 226 236 / 70%); text-align: center; }
+</style>
+</head>
+<body>
+<div id="pond"></div>
+<p class="title">a pond of memories<small>雨夜樱池</small></p>
+<button id="lamp" class="round on" type="button" aria-label="关灯" aria-pressed="true">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></svg>
+</button>
+<button id="wind" class="round on" type="button" aria-label="停风" aria-pressed="true">
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h11a3 3 0 1 0-3-3M3 15h15a3 3 0 1 1-3 3M3 12h7"/></svg>
+</button>
+<p id="hint">光下的每一片花瓣都是一段回忆 · 点它看看</p>
+<article id="card" hidden></article>
+<p id="error" hidden></p>
+
+<script type="module">
+  import { Pond } from '/pond/scene.js';
+
+  const KIND = { commitment: '约定', dream: '梦', vow: '誓言', lexicon: '昵称与梗', ritual: '例行' };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const when = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+  let pond;
+  try {
+    pond = new Pond($('pond'));
+  } catch (e) {
+    $('error').hidden = false;
+    $('error').textContent = '这个浏览器打不开 WebGL，池塘看不见了。';
+    throw e;
+  }
+
+  let episodes = [];
+  let shape = '';
+  let whole = false;
+  let picked = null;
+
+  function showCard() {
+    const card = $('card');
+    const e = picked && episodes.find((x) => x.episode_id === picked);
+    if (!e) { card.hidden = true; $('hint').hidden = false; return; }
+    $('hint').hidden = true;
+    const kind = KIND[e.kind] ? `<span class="chip">${KIND[e.kind]}</span>` : '';
+    const topic = e.tag || (e.topics || []).join(' · ');
+    const body = whole || !e.excerpt ? e.content : e.excerpt;
+    const more = e.excerpt && e.excerpt !== e.content ? `<button class="more" type="button">${whole ? '只看一句' : '看完整经过'}</button>` : '';
+    card.innerHTML = `<button class="close" type="button" aria-label="收起">×</button>
+      <p class="meta">${when(e.time_start)}${kind}</p>${topic ? `<p class="topic">${esc(topic)}</p>` : ''}
+      <p class="text">${esc(body)}</p>${more}`;
+    card.hidden = false;
+    card.querySelector('.close').onclick = () => { picked = null; pond.select(null); showCard(); };
+    const m = card.querySelector('.more');
+    if (m) m.onclick = () => { whole = !whole; showCard(); };
+  }
+
+  pond.onFirstTouch = () => $('hint').classList.add('faded');
+  pond.onPick = (id) => { picked = id; whole = false; if (id) $('hint').classList.add('faded'); showCard(); };
+
+  async function load() {
+    try {
+      const res = await fetch('/memory-core');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const snap = await res.json();
+      episodes = (snap.episodes || []).filter((e) => (e.status ?? 'active') === 'active');
+      const key = episodes.map((e) => e.episode_id).join();
+      if (key === shape) return;
+      shape = key;
+      const recalls = new Map();
+      for (const r of snap.retrievals || []) if (r.status === 'LOCKED') for (const id of r.episode_ids || []) recalls.set(id, (recalls.get(id) || 0) + 1);
+      pond.setMemories(episodes.map((e) => ({ id: e.episode_id, at: Date.parse(e.time_start), importance: e.importance ?? 0.5, kind: e.kind || '', recalls: recalls.get(e.episode_id) || 0 })));
+      $('error').hidden = true;
+    } catch (e) {
+      $('error').hidden = false;
+      $('error').textContent = `读不到记忆（${e.message}），池塘先空着。`;
+    }
+  }
+  load();
+  setInterval(load, 30000);
+
+  const toggle = (btn, set, onLabel, offLabel) => {
+    btn.onclick = () => {
+      const on = !btn.classList.contains('on');
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', String(on));
+      btn.setAttribute('aria-label', on ? onLabel : offLabel);
+      set(on);
+    };
+  };
+  toggle($('lamp'), (on) => pond.setLight(on), '关灯', '开灯');
+  toggle($('wind'), (on) => pond.setWind(on), '停风', '起风');
+</script>
+</body>
+</html>

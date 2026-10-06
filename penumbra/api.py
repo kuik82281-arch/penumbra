@@ -20,6 +20,9 @@ POST /retrieval/debug                    {query, policy?, mode?, conversationId?
 GET  /retrieval/stats                    index sizes, recent calls, latency p50/p95, config
 GET  /stats, GET /health
 
+The night pond (web/pond): this memory as petals on a pond at night, in the browser
+GET  /pond                               the page; GET /pond/scene.js its three.js scene (three itself comes from a CDN)
+
 Preference Learning (bridge path /api/memory/preferences/...; writes need actor "user" (the default); no model involved):
 POST  /preferences/documents                 {owner, title, originalContent, mode?, initialLabels?} -> {document} (a draft)
 GET   /preferences/documents[?status=&owner=]  (without originalContent; with estimatedTokens)      -> {documents}
@@ -45,6 +48,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import identity
@@ -52,6 +56,7 @@ from .preferences import MODES, OWNERS, canonical_labels, estimate_tokens
 from .service import Invalid, NotFound, Penombre
 
 MAX_BODY = 2_000_000
+WEB_POND = Path(__file__).resolve().parent / "web" / "pond"
 # The client went away mid-request (e.g. the bridge restarted): nothing to answer and nothing wrong with the service.
 CLIENT_GONE = (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
 
@@ -149,7 +154,25 @@ def make_handler(service: Penombre):
                 return self._run(service.retrieval.stats)
             if parts[0] == "preferences":
                 return self._preferences_get(parts, q)
+            if parts[0] == "pond":
+                return self._pond(parts[1:])
             self._send(404, {"error": "not found"})
+
+        # ------------------------------------------------------------ the night pond (web/pond): a view of this memory
+
+        def _pond(self, rest: list[str]) -> None:
+            files = {"": ("index.html", "text/html; charset=utf-8"), "scene.js": ("scene.js", "text/javascript; charset=utf-8")}
+            name = "/".join(p for p in rest if p)
+            if name not in files:
+                return self._send(404, {"error": "not found"})
+            file, kind = files[name]
+            body = (WEB_POND / file).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
 
         # ------------------------------------------------------------ preference learning (P2-B)
 

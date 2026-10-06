@@ -30,3 +30,11 @@ Local only (`127.0.0.1`), JSON in and out. The complete list is in the docstring
 | `GET /memory-core/threads`, `POST /memory-core/threads/decide`, `POST /memory-core/threads/story/<id>` | story threads |
 | `GET/POST /memory-core/names`, `POST /memory-core/names/delete`, `POST /memory-core/names/<id>/profile` | the name list and its profiles |
 | `GET/POST /memory-core/mistakes`, `POST /memory-core/mistakes/run`, `POST /memory-core/mistakes/delete` | the mistake set |
+| `GET /memory-core/pipeline` | is the curation getting done: last run / success, unprocessed originals, scheduler error |
+
+## The night pond
+
+| | |
+|---|---|
+| `GET /pond` | a page that shows this service's own memory as petals on a pond at night (three.js from a CDN); every Episode is a petal, those under the light can be tapped and read |
+| `GET /pond/scene.js` | the page's scene module |

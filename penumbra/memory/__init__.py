@@ -161,6 +161,9 @@ class MemoryCore:
         return {**checkpoint, "last_activity_at": self.store.kv_get(LAST_ACTIVITY_KEY),"processed_raw_count": processed, "unprocessed_raw_count": work["unprocessedRaw"],
                 "staging_due": work["stagingDue"], "scheduler_error": self.store.kv_get("scheduler_error")}
 
+    def pipeline_status(self) -> dict:
+        return {**self._checkpoint(), "enabled": self.pipeline.settings()["enabled"], "busy": self.pipeline.work_lock.locked()}
+
     def providers(self, probe: bool = True) -> dict:
         ollama = self.discovery.ollama.status(probe=probe) | (self.store.kv_get("ollama_stats", {}) or {})
         deepseek = self.verifier.status() | (self.store.kv_get("deepseek_stats", {}) or {})
@@ -278,6 +281,10 @@ class MemoryCore:
                 return {"threads": threads_module.move_candidates(self.store, self.read, parts[2])}
             if parts == ["health"]:
                 return self.health()
+            if parts == ["pipeline"]:
+                # Light status for the bridge's dead-light check (is the nightly work getting done?), without the
+                # snapshot's episodes and candidates.
+                return self.pipeline_status()
             if parts == ["names"]:
                 return {"names": names_module.all_names(self.store), "kinds": list(names_module.KINDS)}
             if parts == ["mistakes"]:

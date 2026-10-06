@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.0 — 2026-10-06
+
+- The night pond: `GET /pond` serves a three.js page showing this service's own memory as petals on a pond at night,
+  under cherry trees in the rain. Every Episode is a petal on the water; a beam of light (tap to move it) brightens the
+  petals beneath it, and tapping one reads its excerpt and full account. Recently recalled petals shimmer. Light and
+  wind can be switched off. Nothing but `GET /memory-core` is read.
+- `GET /memory-core/pipeline`: whether the curation is getting done — last run and success, unprocessed originals,
+  staging due, and the scheduler's last error — so a caller can raise an alarm when work piles up and nothing comes out.
+
 ## v0.2.0 — 2026-10-04
 
 - Excerpts: every Episode also gets a one-line excerpt (what it was and what it meant); the full account stays in its

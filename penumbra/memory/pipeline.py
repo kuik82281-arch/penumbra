@@ -42,7 +42,7 @@ from .verification import PROMPT_VERSION, Verifier, build_payload
 
 WINDOW_CHARS = 2600
 # Session segmentation
-SESSION_GAP_MINUTES = 30
+SESSION_GAP_MINUTES = 60
 SESSION_MAX_MSGS = 80
 SESSION_MAX_CHARS = 16000
 LINK_TAIL_MSGS = 6
@@ -75,6 +75,35 @@ def _time_of(raw: list[dict]) -> str | None:
     """When a segment happened (its last message): the threads that moved shortly before it are shown to DeepSeek."""
     stamps = [r.get("createdAt") for r in raw if r.get("createdAt")]
     return max(stamps) if stamps else None
+
+# Episodes that happened around the same time as a candidate go to DeepSeek straight from the store: the retrieval index
+# and the embeddings follow a write in the background, so an Episode applied seconds earlier in the same run (the chat
+# segment of a day, then his own memory of that day) was invisible to related_units and got written a second time.
+NEIGHBOUR_HOURS = 3.0
+DAY_MEMORY_HOURS = 30.0  # his day memory is written at the end of the day: the whole day before it
+MAX_NEIGHBOURS = 6
+
+
+def time_neighbours(store: Store, raw: list[dict], known: set[str]) -> list[dict]:
+    """Active Episodes (no dreams) whose time overlaps the candidate's RAW, nearest first, not already in `known`."""
+    stamps = sorted(r["createdAt"] for r in raw if r.get("createdAt"))
+    if not stamps:
+        return []
+    def ts(value: str) -> float:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    day_memory = any(r.get("sourceType") == "assistant_day_memory" for r in raw)
+    lo = ts(stamps[0]) - 3600 * (DAY_MEMORY_HOURS if day_memory else NEIGHBOUR_HOURS)
+    hi = ts(stamps[-1]) + 3600 * NEIGHBOUR_HOURS
+    mid = (ts(stamps[0]) + ts(stamps[-1])) / 2
+    near = []
+    for e in store.episodes(status="active"):
+        if e["episode_id"] in known or e.get("kind") == "dream" or not e.get("time_start"):
+            continue
+        start, end = ts(e["time_start"]), ts(e.get("time_end") or e["time_start"])
+        if end >= lo and start <= hi:
+            near.append((abs((start + end) / 2 - mid), e))
+    return [e for _, e in sorted(near, key=lambda t: t[0])[:MAX_NEIGHBOURS]]
+
 
 class Pipeline:
     def __init__(self, core):
@@ -296,6 +325,10 @@ class Pipeline:
         query = (" ".join([r["content"] for r in context + raw])[-1600:] if row["origin"] == "session"
                  else " ".join([row["gist"], *[r["content"] for r in raw]])[:400])
         patterns, episodes = self.core.read.related_units(query)
+        neighbours = time_neighbours(self.store, raw, {e["episode_id"] for e in episodes})
+        for e in neighbours:
+            e["pattern_ids"] = self.core.read._pattern_ids_of(e["episode_id"])
+        episodes = episodes + neighbours
         payload = build_payload({**dict(row), "kind_hint": row["kind_hint"], "entities": json.loads(row["entities"])}, raw, context, patterns, episodes, now_iso(),
                                 commitments.for_verification(self.core),
                                 threads_module.candidates_for(self.store, [e["episode_id"] for e in episodes], _time_of(raw)),

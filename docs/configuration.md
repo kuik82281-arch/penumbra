@@ -28,13 +28,19 @@
  "user_pronoun": "她",
  "assistant_pronoun": "他",
  "aliases": {"user": [], "assistant": []},
- "preference_labels": []
+ "preference_labels": [],
+ "filler_words": []
 }
 ```
 
 - `user` / `assistant`: the names memories use (prompts are written with `{{USER}}` / `{{AI}}` placeholders).
 - `aliases`: other words a client sends for each role as actor / author / owner.
 - `preference_labels`: extra labels for preference documents beyond the built-in set.
+- `filler_words`: the pet names and calls the two of them use. A message made mostly of these (plus particles) has no
+  topic of its own, so retrieval searches with the lines before it instead of finding every tender memory.
+
+The memory gate (DeepSeek before and after the search) is configured by `PENUMBRA_MEMORY_GATE` (on | judge | intent |
+off), `MEMORY_GATE_BUDGET` (seconds for the whole retrieval, default 5.5) and `MEMORY_GATE_TIMEOUT` (one call, default 2).
 
 ## Prompts
 

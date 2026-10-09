@@ -39,7 +39,7 @@ def remember(core, body: dict) -> dict:
     if ref in store.tombstoned_raw_ids():
         return {"status": "tombstoned", "episode": None}
     existing = _episode_for(store, ref)
-    if existing:
+    if existing and not body.get("resummarize"):
         return {"status": "existing", "episode": core.read.episode_view(existing)}
     client = core.verifier.client
     if not client.available():
@@ -54,6 +54,10 @@ def remember(core, body: dict) -> dict:
     if bad:  # a sentence that is not in the dream cannot become "what I dreamt"
         raise Invalid(f"unverified quote: “{bad[0][:60]}”")
     keywords = [str(k)[:20] for k in (answer.get("keywords") or []) if str(k).strip()][:5]
+
+    if existing:  # asked to write the summary again (a prompt got tighter): a new version of the same Episode
+        updated = store.update_episode(existing["episode_id"], {"content": summary, "topics": ["她的梦" if hers else "梦", *keywords]}, actor="deepseek", reason="dream summary written again")
+        return {"status": "updated", "episode": core.read.episode_view(updated)}
     stamp = normalize_time(body.get("time")) if body.get("time") else now_iso()
     episode = store.insert_episode({
         "content": summary, "time_start": stamp, "time_end": stamp, "topics": ["她的梦" if hers else "梦", *keywords], "importance": 0.35, "confidence": 1.0,

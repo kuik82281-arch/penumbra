@@ -12,6 +12,7 @@ POST /memory-core/confirm                {injectId, conversationId, sessionId, r
 POST /memory-core/recall                 {pattern_id | episode_id | raw_ids[] | query, turnId?, currentSession?}  expand (Search Once)
 GET  /memory-core                        snapshot: counts, patterns, episodes, candidates (STAGING / QUARANTINE), runs, providers, audit
 GET  /memory-core/health                 Ollama / DeepSeek / reranker / embedding
+GET  /memory-core/gate-stats             the memory gate: calls, timeouts / errors, degradations, what reached the turn
 GET  /memory-core/raw | /patterns | /episodes | /decisions | /locks | /attachments | /provenance/<pattern|episode>/<id>
 POST /memory-core/run | /run-sync | /tick | /settings | /activity | /note | /edit | /review | /retry
 

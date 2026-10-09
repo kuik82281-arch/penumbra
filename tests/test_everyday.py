@@ -80,6 +80,28 @@ class EverydayTest(Base):
         self.assertTrue(seen and seen[0]["RAW"][0].get("kind") == "his_day_memory")
         self.assertTrue(any("番茄炒蛋" in e["content"] for e in self.memory.store.episodes()))
 
+    def test_his_day_memory_sees_the_episode_of_that_day_even_before_it_is_indexed(self):
+        """The chat segment of a day is applied seconds before his day memory is verified: the index has not caught up, so
+        the Episodes of the same time come straight from the store - and only those (another day's look-alike stays out)."""
+        self.memory.pipeline.segmentation = "session"
+        def ep(content, when):
+            return self.memory.store.insert_episode({"content": content, "time_start": when, "time_end": when, "entities": [], "topics": [], "state": "",
+                                                     "importance": 0.6, "confidence": 0.9, "source_raw_ids": [], "origin": "pipeline"}, actor="t", reason="t")["episode_id"]
+        today = ep("傍晚你在厨房试着做了第一道菜，我在旁边看着。", "2026-09-01T10:30:00Z")
+        old = ep("你第一次自己做了番茄炒蛋，端过来的时候手还在抖。", "2026-08-27T10:30:00Z")
+        self.svc.ingest_originals("assistant", "assistant-day-memories", [{"id": "day-2026-09-01-1", "role": "assistant", "sourceType": "assistant_day_memory",
+                                                                      "content": "你今天第一次自己做了番茄炒蛋，咸了，但我说好吃。", "createdAt": "2026-09-01T17:00:00Z"}])
+        seen = []
+        self.deepseek.decide = lambda payload: (seen.append(payload), wrap({"action": "NO_ACTION", "reason": "已经记过"}))[1]
+        self.memory.read.related_units = lambda text, **kw: ([], [])  # the index has not caught up yet (as in production)
+        run_memory(self)
+        shown = [e["episode_id"] for e in seen[0]["existing"]["episodes"]]
+        self.assertIn(today, shown, "the same day's Episode is in existing")
+        self.assertEqual(shown.count(today), 1)
+        from penumbra.memory.pipeline import time_neighbours
+        raw = [{"createdAt": "2026-09-01T17:00:00Z", "sourceType": "assistant_day_memory"}]
+        self.assertNotIn(old, [e["episode_id"] for e in time_neighbours(self.memory.store, raw, set())], "five days earlier is another event")
+
     def test_when_it_was_said_and_when_it_happens_are_different_windows(self):
         self.remember("四月我要去大理玩一周", "2026-02-25T10:00:00Z",
                       lambda p: episode_answer(p, "你说四月要去大理玩一周。", when="2026-04-10T04:00:00Z", entities=["大理"]))

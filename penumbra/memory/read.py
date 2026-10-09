@@ -30,7 +30,9 @@ from ..retrieval import RetrievalRequest, RetrievalCore
 from .store import dumps, mint, now_iso
 from . import names as names_module
 from . import threads as threads_module
+from . import gate as gate_module
 from . import rewrite as rewrite_module
+from .gate import MemoryGate
 from .rewrite import QueryRewriter
 
 INJECT_TOP = 12
@@ -45,7 +47,44 @@ COOLDOWN_HOURS = float(os.environ.get("PENUMBRA_COOLDOWN_HOURS", "") or 24.0)
 # "上个月我们聊过什么" asks when it was said, not when it happened: the window is matched against the messages a memory
 # came from (their time), not the event's own time.
 MENTION_CUE = re.compile(r"说过|说起|聊过|聊到|提到|提起|讲过|告诉过|跟我说|和我说|问过")
+# Calls and particles: a message made mostly of these says little on its own, so it searches with the two lines before
+# it - otherwise one pet name finds every tender memory. The pet names themselves are the deployment's own (the
+# profile's "filler_words", identity.py); only the particles are built in.
+FILLER = re.compile(r"亲爱的|喂|嘛|呀|啊|呢|吧|哦|噢|嗯|啦|哈|嘿|诶|欸|哎|～|~|[\s，。！？!?,.、…·]")
+MIN_CONTENT = 6
+# A stage direction in brackets ("（故意撅着嘴）", "（得意）") is how she says it, not what she talks about.
+STAGE = re.compile(r"[（(][^（）()]*[）)]")
+# Below this much real content ("你猜呀（得意）" -> 你猜, "不开心（撅嘴）" -> 不开心) a message has no topic of its own: a memory
+# needs a clearly close meaning to come in, not a shared word (calibrated: such hits sat at 0.61, real ones at 0.64+).
+TINY_CONTENT = 4
+TINY_VECTOR_MIN = 0.65
+
+
+def _content_length(query: str) -> int:
+    text = STAGE.sub("", query)
+    for word in identity.current().filler_words:
+        text = text.replace(word, "")
+    return len(FILLER.sub("", text))
+
+
+def _close_enough_for_tiny(hit: dict) -> bool:
+    sig = hit.get("signals") or {}
+    if (sig.get("entity") or {}).get("rank") or sig.get("named"):
+        return True
+    similarity = (sig.get("vector") or {}).get("similarity")
+    return similarity is not None and similarity >= TINY_VECTOR_MIN
+
+
 RECALL_CUE = re.compile(r"上次|上回|还记得|记不记得|记得吗|那次|那回|那天|之前|以前|说过|讲过|聊过")
+# A message that plainly leans on the past (a word of RECALL_CUE, a promise, "...来着", or a name from her 专名库). When the
+# gate cannot answer, only such a message still gets memory - and then only what words / names / entities agree on.
+HISTORY_CUE = re.compile(RECALL_CUE.pattern + r"|答应过|答应我|说好|约好|约定|来着|那个人|那家")
+# DEGRADE (the gate failed: timeout, error, or no time left in the budget). Never "inject what the ranking found":
+#   intent failed, no history in the message        -> no memory (nothing unverified for a message that does not need it)
+#   intent failed, the message leans on the past     -> search, and the judge still decides
+#   judge failed, need yes / leans on the past        -> only strong candidates (not found by meaning alone, or named)
+#   judge failed, need maybe                          -> no memory
+# A history question left with nothing says so (retry_hint): the bridge tells him he can recall it himself.
 MAX_DOCUMENTS = 2
 TIME_BOOST = 1.25
 RERANK_AMBIGUITY = 0.4
@@ -308,6 +347,7 @@ class MemoryRead:
         self.svc = core.service
         self.reranker = BGEReranker()
         self.rewriter = QueryRewriter()
+        self.gate = MemoryGate()
 
     # ------------------------------------------------------------ projection into the retrieval index
 
@@ -563,19 +603,51 @@ class MemoryRead:
             return self._lock_view(lock)  # Search Once: this turn already searched
         recent = body.get("recent") or []
         search_text = query
-        if len(query) < 6 and recent:
+        if _content_length(query) < MIN_CONTENT and recent:
             search_text = " ".join([*(str(r.get("content") or "") for r in recent[-2:]), query])[:600]
         now = self.svc._now()
         stages: list[dict] = []
         window = time_window(query, now)
+        # --- Intent (DeepSeek): does this message need long-term memory at all, and what is really being looked for
+        gate_mode = gate_module.mode(body.get("gate")) if policy == "inject" else "off"
+        gated = gate_mode != "off" and self.gate.available()
+        history = bool(HISTORY_CUE.search(query)) or bool(gated and names_module.mentioned(self.store, query))
+        seek, need, degraded = "", None, None
+        if gated and gate_mode in ("on", "intent"):
+            intent = self.gate.intent(query, recent, timeout_s=min(gate_module.CALL_TIMEOUT_S, gate_module.BUDGET_S))
+            stages.append({"stage": "intent", **intent})
+            need = intent.get("need")
+            skip = None
+            if need == "none" and not RECALL_CUE.search(query):
+                skip = "intent: none"
+            elif need is None and not history:
+                skip, degraded = "intent failed, no history in the message", f"intent_{intent.get('failure', 'error')}_skip"
+            elif need is None:
+                degraded, need = f"intent_{intent.get('failure', 'error')}_history", "yes"
+            if skip:
+                result = {"status": "NO_MEMORY_NEEDED", "turn_id": turn_id, "query": query, "patterns": [], "episodes": [], "documents": [], "profiles": [], "refs": [],
+                          "reused_lock": False, "search_count": 0, "time_window": window, "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                          "degraded": degraded, "retry_hint": False, "trace": {"stages": stages, "engine": None}}
+                self._gate_stats(intent=intent, judge=None, degraded=degraded, status="NO_MEMORY_NEEDED", dry=dry)
+                return result if dry else self._record(result, policy, conversation_id, window)
+            seek = intent.get("seek") or ""
         found = self._engine(search_text, policy=policy, top_k=INJECT_TOP, conversation_id=conversation_id, session_id=session_id)
         hits = list(found["hits"])
+        if policy == "inject" and _content_length(query) < TINY_CONTENT:
+            kept = [h for h in hits if _close_enough_for_tiny(h)]
+            stages.append({"stage": "tiny", "content": _content_length(query), "dropped": len(hits) - len(kept)})
+            hits = kept
         stages.append({"stage": "engine", "signals": found["summary"]["signals"], "vector": found["summary"]["vector"], "candidates": len(found["scored"]), "kept": len(hits),
                        "belowThreshold": len(found["debug"]["belowThreshold"]), "deduped": len(found["dropped"]), "timings": found["debug"]["timings"]})
+        meaning = search_text  # what the cross-encoder, names and rescue read
+        if seek and seek != search_text:
+            again = self._engine(seek, policy=policy, top_k=INJECT_TOP, conversation_id=conversation_id, session_id=session_id)
+            hits, fused = _fuse(hits, list(again["hits"]))
+            meaning = f"{seek} {query}"
+            stages.append({"stage": "seek", "seek": seek, "kept": len(again["hits"]), **fused})
         # --- Rewrite: the same search again with what she means ("那个后来怎么样了" -> its topic), fused with the original
         rewrite_mode = rewrite_module.mode() if body.get("rewrite") is not False else "off"
         rewritten = self.rewriter.rewrite(query, recent) if rewrite_mode in ("on", "shadow") else None
-        meaning = search_text  # what the cross-encoder, names and rescue read
         if rewrite_mode == "context":
             # No model: a message that points back ("那个", "它", "这块") searches once more with the two lines before it,
             # fused with the original - a clear message (no such word) searches exactly as it always did.
@@ -754,6 +826,38 @@ class MemoryRead:
                     ranked = [(pid, g) for pid, g in ranked if not g["weak"] or by.get(("pattern", pid), 1.0) >= RERANK_FLOOR]
                     orphans = {eid: h for eid, h in orphans.items() if not _semantic_only(h) or by.get(("episode", eid), 1.0) >= RERANK_FLOOR}
         stages.append({"stage": "rerank", **rerank})
+        # --- Judge (DeepSeek): of what is left, only what really helps this reply - a shared word or mood is not enough
+        verdict = None
+        if gated and gate_mode in ("on", "judge") and (ranked or orphans):
+            cands = sorted([("pattern", pid, g["score"]) for pid, g in ranked] + [("episode", eid, h["score"]) for eid, h in orphans.items()], key=lambda c: -c[2])
+            cands = cands[:gate_module.MAX_CANDIDATES]
+            docs = []
+            for kind, ident, _ in cands:
+                if kind == "pattern":
+                    p = self.store.pattern(ident)
+                    docs.append(f"{p['title']}：{p['narrative'][:300]}（现在：{p['current_state']}）")
+                else:
+                    docs.append(self.store.episode(ident)["content"][:400])
+            left = gate_module.BUDGET_S - (time.perf_counter() - started)
+            if degraded and degraded.startswith("intent_timeout"):
+                # DeepSeek just timed out on this very turn: asking again would only wait out a second timeout
+                verdict = {"latency_ms": 0, "error": "skipped: the intent call of this turn timed out", "failure": "timeout"}
+            else:
+                verdict = self.gate.judge(query, body.get("recent") or [], seek, docs, timeout_s=min(gate_module.CALL_TIMEOUT_S, left))
+            if "keep" in verdict:
+                kept_ids = {(cands[i][0], cands[i][1]) for i in verdict["keep"]}
+            elif need == "yes" or history or gate_mode == "judge":
+                # unverified: only what words, a name or an entity agree on (not the embedding alone)
+                kept_ids = {("pattern", pid) for pid, g in ranked if not g["weak"] or g.get("named")}
+                kept_ids |= {("episode", eid) for eid, h in orphans.items() if not _semantic_only(h) or (h.get("signals") or {}).get("named")}
+                degraded = degraded or f"judge_{verdict.get('failure', 'error')}_strong_only"
+            else:
+                kept_ids = set()
+                degraded = degraded or f"judge_{verdict.get('failure', 'error')}_dropped"
+            ranked = [(pid, g) for pid, g in ranked if ("pattern", pid) in kept_ids]
+            orphans = {eid: h for eid, h in orphans.items() if ("episode", eid) in kept_ids}
+            verdict["dropped"] = [f"{k}:{i}" for k, i, _ in cands if (k, i) not in kept_ids]
+            stages.append({"stage": "judge", **verdict})
         # --- Threshold / caps -> NO_MEMORY_NEEDED, or the final selection
         ranked = ranked[:MAX_PATTERNS]
         orphan_list = list(orphans.values())[:MAX_EPISODES]
@@ -786,11 +890,41 @@ class MemoryRead:
         engine_trace = RetrievalCore.trace(found)
         refs = [{"kind": "pattern", "id": p["pattern_id"], "version": p["version"]} for p in patterns] + [{"kind": "episode", "id": e["episode_id"], "version": e["version"]} for e in episodes]
         latency = round((time.perf_counter() - started) * 1000, 1)
+        retry_hint = bool(degraded and history and status == "NO_MEMORY_NEEDED")
+        if gated:
+            self._gate_stats(intent=next((st for st in stages if st["stage"] == "intent"), None), judge=verdict, degraded=degraded, status=status, dry=dry)
         result = {"status": status, "turn_id": turn_id, "query": query, "patterns": patterns, "episodes": episodes, "documents": docs, "profiles": profiles,
+                  "degraded": degraded, "retry_hint": retry_hint,
                   "refs": refs, "reused_lock": False,
                   "search_count": 1, "time_window": window, "latency_ms": latency, "trace": {"stages": stages, "engine": engine_trace}}
+        return result if dry else self._record(result, policy, conversation_id, window)
+
+    def _gate_stats(self, *, intent: dict | None, judge: dict | None, degraded: str | None, status: str, dry: bool) -> None:
+        """Running counts of the gate's calls, its failures, the degradations and what reached the turn (kv gate_stats)."""
         if dry:
-            return result
+            return
+        stats = self.store.kv_get("gate_stats") or {}
+
+        def bump(key: str) -> None:
+            stats[key] = stats.get(key, 0) + 1
+        bump("turns")
+        for name, call in (("intent", intent), ("judge", judge)):
+            if call is not None:
+                bump(f"{name}_{call.get('failure') or 'ok'}")
+        if degraded:
+            bump(f"degraded_{degraded}")
+            stats["last_degraded"] = {"at": now_iso(), "mode": degraded}
+        bump("injected" if status == "LOCKED" else "no_memory")
+        stats["since"] = stats.get("since") or now_iso()
+        self.store.kv_set("gate_stats", stats)
+
+    def gate_stats(self) -> dict:
+        return self.store.kv_get("gate_stats") or {}
+
+    def _record(self, result: dict, policy: str, conversation_id, window) -> dict:
+        """Lock what a turn found (LOCKED) and log the retrieval; returns the result with lock_id / inject_id."""
+        status, turn_id, query, latency = result["status"], result["turn_id"], result["query"], result["latency_ms"]
+        patterns, episodes, refs, stages = result["patterns"], result["episodes"], result["refs"], result["trace"]["stages"]
         lock_id = None
         with self.store.tx() as db:
             if status == "LOCKED":

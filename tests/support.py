@@ -20,6 +20,7 @@ from penumbra.text import normalize
 # Most tests script the discovery model's spans; the session segmentation has its own tests (test_sessions.py).
 os.environ.setdefault("PENUMBRA_SEGMENTATION", "discovery")
 os.environ.setdefault("PENUMBRA_QUERY_REWRITE", "off")  # tests never call a real model; tests/test_rewrite.py uses a fake one
+os.environ.setdefault("PENUMBRA_MEMORY_GATE", "off")  # nor DeepSeek: tests/test_gate.py uses a fake one
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 CONV = "conv-test"

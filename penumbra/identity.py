@@ -33,6 +33,9 @@ class Identity:
     assistant_aliases: tuple = ()
     # Preference labels this deployment uses beyond the built-in ones (preferences.py).
     extra_labels: tuple = ()
+    # Pet names and calls between them ("filler_words" in the profile): a message made mostly of these has no topic of
+    # its own (memory/read.py), so it searches with the lines before it.
+    filler_words: tuple = ()
 
 
 _current = Identity()
@@ -56,7 +59,8 @@ def load(data_dir: str | os.PathLike | None) -> Identity:
     _current = Identity(str(user), str(assistant), {str(k): str(v) for k, v in examples.items()},
                         str(profile.get("user_pronoun") or "她"), str(profile.get("assistant_pronoun") or "他"),
                         tuple(str(a).lower() for a in aliases.get("user", [])), tuple(str(a).lower() for a in aliases.get("assistant", [])),
-                        tuple(str(x) for x in profile.get("preference_labels", []) if str(x).strip()))
+                        tuple(str(x) for x in profile.get("preference_labels", []) if str(x).strip()),
+                        tuple(str(x) for x in profile.get("filler_words", []) if str(x).strip()))
     return _current
 
 

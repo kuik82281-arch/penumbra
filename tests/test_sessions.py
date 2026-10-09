@@ -1,4 +1,4 @@
-"""Session segmentation: a conversation is cut where it went quiet for half an hour; one segment = one candidate;
+"""Session segmentation: a conversation is cut where it went quiet for an hour; one segment = one candidate;
 the previous segment's end rides along as context; an ongoing chat waits; nothing is cut twice."""
 import json
 from datetime import datetime, timezone
@@ -20,10 +20,10 @@ class SessionTest(Base):
     def candidates(self):
         return self.memory.store.all("SELECT gist, raw_ids, context_raw_ids, origin FROM candidates ORDER BY created_at")
 
-    def test_half_an_hour_of_silence_ends_a_segment_and_each_segment_is_one_candidate(self):
+    def test_an_hour_of_silence_ends_a_segment_and_each_segment_is_one_candidate(self):
         a = [self.raw("周末想去海边", at="2026-09-01T10:00:00Z"), self.raw("好啊", at="2026-09-01T10:01:00Z", role="assistant"),
              self.raw("嗯嗯", at="2026-09-01T10:20:00Z")]
-        b = [self.raw("我回来啦", at="2026-09-01T11:00:00Z"), self.raw("刚才说到海边", at="2026-09-01T11:02:00Z")]
+        b = [self.raw("我回来啦", at="2026-09-01T11:30:00Z"), self.raw("刚才说到海边", at="2026-09-01T11:32:00Z")]
         run_memory(self)
         rows = self.candidates()
         self.assertEqual([json.loads(r["raw_ids"]) for r in rows], [a, b], "no single-message or overlapping candidates")
@@ -55,3 +55,28 @@ class SessionTest(Base):
         self.assertGreater(len(parts), 1)
         self.assertEqual(sum(len(x) for x in parts), 100)
         self.assertTrue(all(len(x) <= 80 for x in parts))
+
+
+class SameStretchTest(Base):
+    """One scene told twice (two Episodes over mostly the same RAW) is kept as one memory with the fuller telling."""
+
+    def setUp(self):
+        super().setUp()
+        self.memory.pipeline.segmentation = "session"
+
+        def decide(payload):
+            ids = [r["id"] for r in payload["RAW"]]
+            first = episode_answer(payload, "她泡在泳池里，他叫她进来吃牛排。", ref="e1") | {"source_raw_ids": ids}
+            second = episode_answer(payload, "她泡在泳池里不肯出来，他把牛排煎好，叫她进来，用浴巾给她擦干头发。", ref="e2") | {"source_raw_ids": ids[1:]}
+            return wrap(first, second)
+        self.deepseek.decide = decide
+
+    def test_a_scene_told_twice_is_one_episode(self):
+        self.raw("我在泳池呀", at="2026-09-01T10:00:00Z")
+        self.raw("进来吃饭", at="2026-09-01T10:01:00Z", role="assistant")
+        self.raw("游完进来啦", at="2026-09-01T10:03:00Z")
+        run_memory(self)
+        episodes = self.memory.store.episodes(status="active")
+        self.assertEqual(len(episodes), 1)
+        self.assertIn("浴巾", episodes[0]["content"], "the fuller telling is kept")
+        self.assertEqual(len(episodes[0]["source_raw_ids"]), 3)

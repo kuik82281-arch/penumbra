@@ -293,6 +293,8 @@ class MemoryCore:
                 return {"episodes": self.recent_episodes(int(query.get("days") or 7), int(query.get("limit") or 6))}
             if parts == ["commitments"]:
                 return commitments.for_assistant(self)
+            if parts == ["gate-stats"]:
+                return self.read.gate_stats()
             if parts == ["raw"]:
                 return {"raw": self.raw_list(int(query.get("limit") or 300), query.get("conversationId"), query.get("before"))}
             if parts == ["attachments"]:

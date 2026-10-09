@@ -109,6 +109,12 @@ class RetrievalConfig:
     recall_vector_margin: float = 0.12
     inject_vector_min: float = 0.58
     inject_vector_margin: float = 0.18
+    # A memory injected for shared words must also mean something close: Chinese bigrams split one word into several
+    # "terms" (亮晶晶 -> 亮晶 + 晶晶, 小可爱 -> 小可 + 可爱), so a pet name or one vivid word passed the term gate alone.
+    # Calibrated on 100 real turns: memories that fit sat at 0.6-0.75, the ones that only shared a word at 0.39-0.58.
+    inject_lexical_vector_min: float = 0.6
+    inject_agree_rank: int = 2
+    inject_agree_vector_min: float = 0.55
     raw_recall_vector_min: float = 0.6
     raw_recall_vector_margin: float = 0.22
     entity_common_weight: float = 0.2  # an entity named by more than common_df_ratio of memories weighs this much
@@ -437,6 +443,13 @@ class RetrievalCore:
             return None if matched else "no match"
         if not weights:
             return "no informative query terms"
+        # Both channels agree it is the best there is (top two by words and by meaning): one shared word is enough then,
+        # because a compound message ("黑松露牛排") leaves each word a small share of the terms.
+        lexical_rank = (signals.get("lexical") or {}).get("rank")
+        if policy == "inject" and matched and lexical_rank and lexical_rank <= cfg.inject_agree_rank and vector.get("rank")                 and vector["rank"] <= cfg.inject_agree_rank and similarity is not None and similarity >= cfg.inject_agree_vector_min:
+            return None
+        if policy == "inject" and hit["kind"] != "ORIGINAL" and vector.get("provider") and (similarity is None or similarity < cfg.inject_lexical_vector_min):
+            return f"shares words but not the meaning (semantic {similarity if similarity is not None else 0:.2f})"
         if matched >= cfg.inject_min_terms and coverage >= cfg.inject_min_coverage:
             return None
         if hit["strongTerms"] and coverage >= cfg.inject_strong_min_coverage:

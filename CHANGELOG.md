@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.4.0 — 2026-10-09
+
+- Memory gate (`memory/gate.py`, prompts `intent.md` / `judge.md`): before the search, DeepSeek reads the message and
+  the lines before it and says whether long-term memory is needed at all (none / maybe / yes) and what is really being
+  looked for, which is searched as well; after the ranking it keeps only the candidates that really help this reply.
+  `PENUMBRA_MEMORY_GATE` = on | judge | intent | off.
+- Conservative degradation: a failing gate never falls back to "inject what the ranking found". Without an answer, a
+  message that does not lean on the past gets no memory; one that does still searches, and keeps only candidates that
+  words, names or entities agree on; a history question left with nothing returns `retry_hint`. One attempt per call
+  within a 5.5 s budget (`MEMORY_GATE_BUDGET`, `MEMORY_GATE_TIMEOUT`), and after two timeouts in a row DeepSeek is not
+  asked for a minute. Counts: `GET /memory-core/gate-stats`.
+- Evaluation without self-grading: `python -m penumbra.turn_eval --labeled <file>` scores replayed messages against
+  fixed hand labels (need, acceptable memories, needed memories): irrelevant recall, effective recall by category, and
+  every needed case that was blocked and where. Memories written after a replayed message are counted apart.
+- No second copy of the same day: Episodes from around the same time reach verification straight from the store (the
+  index follows writes in the background, so one applied seconds earlier in the same run was missed); the model still
+  decides between update and nothing new. A new plain Episode whose originals mostly back an existing one folds into it.
+- Retrieval: bracketed stage directions are not a topic; a message that is mostly calls and particles searches with
+  the lines before it (the deployment's own pet names: `filler_words` in profile.json); a memory that only shares a word
+  must also be close in meaning.
+- Dream summaries can be rewritten (a new version of the same Episode) and are a real compression.
+
 ## v0.3.0 — 2026-10-06
 
 - The night pond: `GET /pond` serves a three.js page showing this service's own memory as petals on a pond at night,

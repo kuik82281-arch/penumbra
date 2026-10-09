@@ -20,6 +20,8 @@ from . import threads as threads_module
 
 TERMINAL = ("QUARANTINE", "REJECT", "NO_ACTION")
 WRITING = ("CREATE_EPISODE", "UPDATE_EPISODE", "MERGE_EPISODE", "CREATE_PATTERN", "UPDATE_PATTERN")
+# A new plain Episode whose RAW is at least this share inside one existing plain Episode is that Episode again.
+SAME_STRETCH = 0.6
 ALL_ACTIONS = WRITING + TERMINAL
 MIN_CONFIDENCE = 0.7
 MAX_ACTIONS = 8
@@ -482,6 +484,21 @@ def apply_plan(store: Store, plan: Plan, candidate_id: str | None, decision_id: 
                 if dup:
                     refs[a["ref"]] = dup["episode_id"]
                     continue
+                # The same stretch of chat told twice (one plan splitting a scene, or two overlapping segments): when most of
+                # its RAW already backs a plain Episode, it is that Episode - one memory, the fuller telling, all the evidence.
+                if not a.get("kind") and a["source_raw_ids"]:
+                    new = set(a["source_raw_ids"])
+                    same_stretch = max(((len(new & set(e["source_raw_ids"])) / len(new), e) for e in store.episodes(status="active")
+                                        if not e.get("kind") and new & set(e["source_raw_ids"])), key=lambda t: t[0], default=(0, None))
+                    if same_stretch[0] >= SAME_STRETCH:
+                        old = same_stretch[1]
+                        patch = {"source_raw_ids": _union(old["source_raw_ids"], a["source_raw_ids"]), "time_end": max(old["time_end"], a["time_end"])}
+                        if len(a["content"]) > len(old["content"]):
+                            patch["content"] = a["content"]
+                        store.update_episode(old["episode_id"], patch, actor=actor, reason="same stretch of chat again", decision_id=decision_id)
+                        refs[a["ref"]] = old["episode_id"]
+                        applied["episodes_updated"].append(old["episode_id"])
+                        continue
                 # The same word of theirs again (same 梗· / 昵称· tag): one memory, the newer telling, all the evidence.
                 word = a.get("kind") == "lexicon" and next((e for e in store.episodes(status="active") if e.get("kind") == "lexicon"
                                                             and e.get("tag") and e.get("tag") == a.get("tag")), None)

@@ -97,9 +97,11 @@ class MemoryGate:
             slow = _slow(text) or ms() >= client.timeout_s * 950
             return None, {"latency_ms": ms(), "error": text, "failure": "timeout" if slow else "error"}
 
-    def intent(self, query: str, recent: list[dict], timeout_s: float = CALL_TIMEOUT_S) -> dict:
-        """{need: none|maybe|yes, seek, latency_ms} or {error, failure, latency_ms}."""
-        answer, meta = self._ask("intent", f"最近的对话：\n{_lines(recent)}\n\n她刚说：{query[:600]}", 200, timeout_s)
+    def intent(self, query: str, recent: list[dict], timeout_s: float = CALL_TIMEOUT_S, names: list[str] | None = None) -> dict:
+        """{need: none|maybe|yes, seek, latency_ms} or {error, failure, latency_ms}. `names`: who or what the names in the
+        message are (her 专名库), so the need is written about the right thing and not guessed."""
+        known = "\n\n这句话里的名字（她自己记下的）：\n" + "\n".join(f"- {n[:160]}" for n in names[:4]) if names else ""
+        answer, meta = self._ask("intent", f"最近的对话：\n{_lines(recent)}\n\n她刚说：{query[:600]}{known}", 200, timeout_s)
         if answer is None:
             return meta
         need = answer.get("need") if answer.get("need") in ("none", "maybe", "yes") else None

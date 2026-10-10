@@ -118,6 +118,26 @@ class GateRetrieveTest(Base):
         r = self.retrieve("我们吵架了你该怎么做", fake, gate="off")
         self.assertEqual((r["status"], fake.calls), ("LOCKED", []))
 
+    def test_the_intent_is_told_who_a_name_is(self):
+        from penumbra.memory import names
+        names.save(self.memory.store, {"name": "年糕", "kind": "宠物", "note": "她领养的橘猫"})
+        fake = FakeClient(intent={"need": "none", "seek": ""})
+        self.retrieve("年糕想吃这个", fake)
+        self.assertIn("年糕（宠物）：她领养的橘猫", fake.calls[0][1])
+        self.retrieve("我想吃这个", fake, turn="t-plain")
+        self.assertNotIn("她自己记下的", fake.calls[1][1])
+
+    def test_an_episode_told_from_the_current_session_is_not_a_memory(self):
+        raw = self.memory.store.episode(self.fight)["source_raw_ids"][0]
+        row = self.svc.conn.execute("SELECT conversation_id, created_at FROM originals WHERE id = ?", (raw,)).fetchone()
+        fake = FakeClient(judge={"keep": [0]})
+        ask = lambda since, turn: self.retrieve("我们吵架了你该怎么做", fake, turn=turn, gate="judge",  # noqa: E731
+                                                currentSession={"conversationId": row["conversation_id"], "since": since})
+        r = ask("2000-01-01T00:00:00.000Z", "t-in")
+        self.assertEqual(r["status"], "NO_MEMORY_NEEDED")
+        self.assertEqual(next(s for s in r["trace"]["stages"] if s["stage"] == "current_session")["dropped"], [self.fight])
+        self.assertEqual(ask("2999-01-01T00:00:00.000Z", "t-before")["status"], "LOCKED")  # said before this session opened
+
 
 class GateParseTest(unittest.TestCase):
     def test_bad_answers_are_errors_not_decisions(self):

@@ -6,7 +6,7 @@ POST /originals                          {source, conversationId, items[], conte
 GET  /originals/<id>                     the stored original with its provenance and attachments
 
 Unified memory: RAW -> Episode -> Pattern   (everything under /memory-core)
-POST /memory-core/retrieve               {query, turnId, conversationId, sessionId, recent?} -> LOCKED | NO_MEMORY_NEEDED
+POST /memory-core/retrieve               {query, turnId, conversationId, sessionId, recent?, currentSession?} -> LOCKED | NO_MEMORY_NEEDED
                                          (the turn's one search, Patterns first; creates the turn's memory lock)
 POST /memory-core/confirm                {injectId, conversationId, sessionId, refs[{kind,id,version}]}  seen suppression, after the turn
 POST /memory-core/recall                 {pattern_id | episode_id | raw_ids[] | query, turnId?, currentSession?}  expand (Search Once)

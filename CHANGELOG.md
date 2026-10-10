@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.1 — 2026-10-11
+
+Found by reading a few days of real retrieval traces rather than the labelled set:
+
+- The scene going on is not a memory: `POST /memory-core/retrieve` takes `currentSession: {conversationId, since}`, and
+  an Episode told only from messages of that session (which the assistant still holds word for word) is left out of an
+  inject search. A turn had been handed the Episode written from that same evening's chat.
+- A call is not a topic: the deployment's pet names (`filler_words`) are taken out of the search text, so a memory that
+  is about the call itself no longer answers every message that uses it. A message that asks for the past keeps them.
+- Names: the intent call is told who the names in the message are (the name lexicon's note or profile), so the need is
+  written about the right thing instead of guessed; a name's profile travels once per assistant session, and again when
+  it was rewritten, not with every mention.
+
 ## v0.4.0 — 2026-10-09
 
 - Memory gate (`memory/gate.py`, prompts `intent.md` / `judge.md`): before the search, DeepSeek reads the message and

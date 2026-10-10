@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -65,6 +66,20 @@ def _content_length(query: str) -> int:
     for word in identity.current().filler_words:
         text = text.replace(word, "")
     return len(FILLER.sub("", text))
+
+
+def _without_calls(text: str) -> str:
+    """The message without the pet names they call each other: a call is not a topic. A memory that is about the call
+    itself ("你开口就叫我…") otherwise answers every message that uses it."""
+    out = text
+    for word in sorted(identity.current().filler_words, key=len, reverse=True):
+        out = out.replace(word, " ")
+    return out if FILLER.sub("", out) else text
+
+
+def _profile_version(profile: str) -> int:
+    """A stable number for a profile's text: a rewritten profile is a new one to a session that saw the old."""
+    return zlib.crc32(profile.encode("utf-8")) & 0x7FFFFFFF
 
 
 def _close_enough_for_tiny(hit: dict) -> bool:
@@ -537,6 +552,15 @@ class MemoryRead:
                                          (window["after"], window["before"])).fetchall()
         return {r["id"] for r in rows}
 
+    def _said_in_session(self, current: dict) -> set[str]:
+        """The ids of the original messages of the current Claude session (its conversation, since it opened)."""
+        conv, since = str(current.get("conversationId") or ""), str(current.get("since") or "")
+        if not conv or not since:
+            return set()
+        with self.svc.lock:
+            rows = self.svc.conn.execute("SELECT id FROM originals WHERE conversation_id = ? AND created_at >= ?", (conv, since)).fetchall()
+        return {r["id"] for r in rows}
+
     def _recently_carried(self, conversation_id: str | None) -> set[tuple[str, str, int]]:
         """What any of his sessions in this conversation was given within COOLDOWN_HOURS (by version: a changed memory is new)."""
         if not conversation_id:
@@ -549,7 +573,7 @@ class MemoryRead:
         """The turn finished: what its retrieval offered now counts as seen by that Claude session (once, only offered refs)."""
         if not inject_id or not conversation_id or not session_id:
             raise Invalid("injectId, conversationId and sessionId are required")
-        row = self.store.one("SELECT conversation_id, pattern_ids, episode_ids, confirmed_at FROM retrievals WHERE retrieval_id = ?", (inject_id,))
+        row = self.store.one("SELECT conversation_id, pattern_ids, episode_ids, confirmed_at, trace FROM retrievals WHERE retrieval_id = ?", (inject_id,))
         if row is None:
             raise NotFound(f"no retrieval {inject_id}")
         if row["conversation_id"] != conversation_id:
@@ -565,6 +589,10 @@ class MemoryRead:
                     version = int(ref.get("version") or 1)
                     db.execute("INSERT INTO seen VALUES (?,?,?,?,?,?)", (conversation_id, session_id, key[0], key[1], version, now_iso()))
                     confirmed.append({"kind": key[0], "id": key[1], "version": version})
+            # The name profiles this retrieval carried: seen by the session too, so the next mention does not repeat them
+            for stage in (json.loads(row["trace"] or "{}").get("stages") or []):
+                for name_id, version in (stage.get("profiles") or []) if stage.get("stage") == "names" else []:
+                    db.execute("INSERT INTO seen VALUES (?,?,?,?,?,?)", (conversation_id, session_id, "name", str(name_id), int(version), now_iso()))
             db.execute("UPDATE retrievals SET confirmed_at = ? WHERE retrieval_id = ?", (now_iso(), inject_id))
         return {"confirmed": confirmed, "duplicate": False}
 
@@ -603,8 +631,11 @@ class MemoryRead:
             return self._lock_view(lock)  # Search Once: this turn already searched
         recent = body.get("recent") or []
         search_text = query
+        alone = True  # the search reads her message only, not the lines before it
         if _content_length(query) < MIN_CONTENT and recent:
-            search_text = " ".join([*(str(r.get("content") or "") for r in recent[-2:]), query])[:600]
+            search_text, alone = " ".join([*(str(r.get("content") or "") for r in recent[-2:]), query])[:600], False
+        if policy == "inject" and not RECALL_CUE.search(query):  # asking for the past, she may mean the call itself
+            search_text = _without_calls(search_text)
         now = self.svc._now()
         stages: list[dict] = []
         window = time_window(query, now)
@@ -614,7 +645,9 @@ class MemoryRead:
         history = bool(HISTORY_CUE.search(query)) or bool(gated and names_module.mentioned(self.store, query))
         seek, need, degraded = "", None, None
         if gated and gate_mode in ("on", "intent"):
-            intent = self.gate.intent(query, recent, timeout_s=min(gate_module.CALL_TIMEOUT_S, gate_module.BUDGET_S))
+            known = [f"{n['name']}（{n['kind']}）" + (f"：{(n.get('note') or n.get('profile') or '')[:120]}" if n.get("note") or n.get("profile") else "")
+                     for n in names_module.mentioned(self.store, query)]
+            intent = self.gate.intent(query, recent, timeout_s=min(gate_module.CALL_TIMEOUT_S, gate_module.BUDGET_S), names=known)
             stages.append({"stage": "intent", **intent})
             need = intent.get("need")
             skip = None
@@ -641,10 +674,11 @@ class MemoryRead:
                        "belowThreshold": len(found["debug"]["belowThreshold"]), "deduped": len(found["dropped"]), "timings": found["debug"]["timings"]})
         meaning = search_text  # what the cross-encoder, names and rescue read
         if seek and seek != search_text:
+            t0 = time.perf_counter()
             again = self._engine(seek, policy=policy, top_k=INJECT_TOP, conversation_id=conversation_id, session_id=session_id)
             hits, fused = _fuse(hits, list(again["hits"]))
             meaning = f"{seek} {query}"
-            stages.append({"stage": "seek", "seek": seek, "kept": len(again["hits"]), **fused})
+            stages.append({"stage": "seek", "seek": seek, "kept": len(again["hits"]), **fused, "latency_ms": round((time.perf_counter() - t0) * 1000)})
         # --- Rewrite: the same search again with what she means ("那个后来怎么样了" -> its topic), fused with the original
         rewrite_mode = rewrite_module.mode() if body.get("rewrite") is not False else "off"
         rewritten = self.rewriter.rewrite(query, recent) if rewrite_mode in ("on", "shadow") else None
@@ -652,7 +686,7 @@ class MemoryRead:
             # No model: a message that points back ("那个", "它", "这块") searches once more with the two lines before it,
             # fused with the original - a clear message (no such word) searches exactly as it always did.
             lines = [str(r.get("content") or "") for r in recent[-2:] if r.get("content")]
-            if lines and search_text == query and rewrite_module.REFERENT.search(query):
+            if lines and alone and rewrite_module.REFERENT.search(query):
                 context = " ".join(lines)[:400]
                 again = self._engine(f"{context} {query}", policy=policy, top_k=INJECT_TOP, conversation_id=conversation_id, session_id=session_id)
                 hits, fused = _fuse(hits, list(again["hits"]))
@@ -735,13 +769,26 @@ class MemoryRead:
                                  "sourceOriginalIds": sources, "signals": {"named": label}, "reason": f"名字：{label}"})
                     added_named += 1
             hits.sort(key=lambda h: -h["score"])
-            stages.append({"stage": "names", "named": [n["name"] for n in named], "boosted": boosted, "added": added_named})
-            profiles = [{"name": n["name"], "profile": n["profile"]} for n in named if n.get("profile")]
+            # A profile travels once per Claude session (and again when it was rewritten), not with every mention.
+            carried = self._seen(conversation_id, session_id) if policy == "inject" else set()
+            fresh = [n for n in named if n.get("profile") and ("name", n["name_id"], _profile_version(n["profile"])) not in carried]
+            stages.append({"stage": "names", "named": [n["name"] for n in named], "boosted": boosted, "added": added_named,
+                           "profiles": [[n["name_id"], _profile_version(n["profile"])] for n in fresh]})
+            profiles = [{"name": n["name"], "profile": n["profile"]} for n in fresh]
         # --- Rescue: a question that found nothing - its nearest memories by meaning, kept only if the cross-encoder agrees
         if not pure_time and not hits and QUESTION.search(query):
+            t0 = time.perf_counter()
             rescued = self._rescue(meaning)
             hits.extend(rescued)
-            stages.append({"stage": "rescue", "added": [h["hitId"] for h in rescued]})
+            stages.append({"stage": "rescue", "added": [h["hitId"] for h in rescued], "latency_ms": round((time.perf_counter() - t0) * 1000)})
+        # --- Current session: an Episode told from lines his session still holds is the scene going on, not a memory
+        current = body.get("currentSession") if isinstance(body.get("currentSession"), dict) else None
+        if policy == "inject" and current and hits:
+            live = self._said_in_session(current)
+            ongoing = [h["hitId"] for h in hits if h["kind"] == "EPISODE" and h.get("sourceOriginalIds") and set(h["sourceOriginalIds"]) <= live]
+            if ongoing:
+                hits = [h for h in hits if h["hitId"] not in ongoing]
+            stages.append({"stage": "current_session", "dropped": ongoing})
         # --- Pattern first: an Episode hit stands for the Patterns it supports; orphan Episodes stay episodes
         groups: dict[str, dict] = {}
         orphans: dict[str, dict] = {}
@@ -802,7 +849,12 @@ class MemoryRead:
             # real memory from a false friend (it is rare, ~1 s, and the only thing standing between it and the assistant's prompt).
             weak = any(g["weak"] for _, g in ranked) or any(_semantic_only(h) for h in orphans.values())
             rerank.update(ambiguous=ambiguous, weak=weak)
-            if ambiguous or weak:
+            # The judge reads these same candidates next and decides what stays: a cross-encoder pass first (~0.25 s a
+            # candidate on CPU) only spent the turn's budget, and a judge that ran out of it degraded the turn.
+            judged = gated and gate_mode in ("on", "judge") and not (degraded and degraded.startswith("intent_timeout"))
+            if judged and (ambiguous or weak) and os.environ.get("MEMORY_RERANK_BEFORE_JUDGE", "") != "1":
+                rerank["skipped"] = "the judge reads these candidates next"
+            elif ambiguous or weak:
                 docs = []
                 for kind, ident, _ in ordered[:RERANK_DOCS]:
                     if kind == "pattern":
@@ -810,7 +862,9 @@ class MemoryRead:
                         docs.append(f"{p['title']}\n{p['narrative'][:300]}\n当前状态：{p['current_state']}")
                     else:
                         docs.append(self.store.episode(ident)["content"][:400])
+                t0 = time.perf_counter()
                 scores = self.reranker.scores(meaning, docs)
+                rerank["latency_ms"] = round((time.perf_counter() - t0) * 1000)
                 if scores is None:
                     rerank["error"] = self.reranker.error or "reranker unavailable"
                 else:

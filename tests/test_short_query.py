@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from penumbra import identity
-from penumbra.memory.read import MIN_CONTENT, _content_length
+from penumbra.memory.read import MIN_CONTENT, _content_length, _without_calls
 
 # A deployment declares its own pet names ("filler_words" in profile.json); these are a stand-in.
 PROFILE = identity.Identity(filler_words=("小熊", "亲亲宝"))
@@ -26,6 +26,11 @@ class ShortQueryTest(unittest.TestCase):
         self.assertLess(_content_length("你猜呀（得意）"), 4)
         self.assertLess(_content_length("不开心（故意 撅着嘴）"), 4)
         self.assertGreaterEqual(_content_length("（跳过去）小熊人家之前告诉过你吃全熟牛排哒"), MIN_CONTENT)
+
+    def test_a_call_is_not_searched_for(self):
+        self.assertNotIn("小熊", _without_calls("咱们出去吃呗小熊 这样就不用辛苦小熊做啦"))
+        self.assertIn("出去吃", _without_calls("咱们出去吃呗小熊 这样就不用辛苦小熊做啦"))
+        self.assertEqual(_without_calls("小熊～"), "小熊～")  # nothing else in it: left as it is
 
     def test_a_message_with_a_topic_searches_on_its_own(self):
         self.assertGreaterEqual(_content_length("小熊明天去看海吗，想吃海鲜"), MIN_CONTENT)

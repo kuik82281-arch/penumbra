@@ -59,3 +59,11 @@ class ProfileTest(Base):
         self.assertEqual(names.refresh_profiles(self.memory.store, self.memory.verifier.client), [], "nothing changed: no new call")
         found = self.memory.read.retrieve({"query": "糕糕最近怎么样", "dry": True})
         self.assertEqual(found["profiles"], [{"name": "年糕", "profile": "年糕是你领养的橘猫，三岁，最近肠胃不好。"}])
+        # once per Claude session: a turn that carried it and finished is not given it again at the next mention
+        ask = lambda turn: self.memory.read.retrieve({"query": "糕糕最近怎么样", "turnId": turn, "conversationId": "c1", "sessionId": "s1", "gate": "off"})  # noqa: E731
+        first = ask("t1")
+        self.assertEqual(len(first["profiles"]), 1)
+        self.memory.read.confirm(first["inject_id"], "c1", "s1", first["refs"])
+        self.assertEqual(ask("t2")["profiles"], [])
+        other = self.memory.read.retrieve({"query": "糕糕最近怎么样", "turnId": "t3", "conversationId": "c1", "sessionId": "s2", "gate": "off"})
+        self.assertEqual(len(other["profiles"]), 1, "another session has not seen it")

@@ -30,6 +30,7 @@ from ..errors import Invalid, NotFound
 from ..retrieval import RetrievalRequest, RetrievalCore
 from .store import dumps, mint, now_iso
 from . import names as names_module
+from . import need as need_module
 from . import threads as threads_module
 from . import gate as gate_module
 from . import rewrite as rewrite_module
@@ -270,6 +271,11 @@ def time_window(query: str, now: datetime | None = None) -> dict | None:
     for word, (a, b) in fixed:
         if word in text:
             return {"after": d(a), "before": d(b), "label": word}
+    # A part of today without a day before it ("上午什么时候喝过", "刚才说的"): today, and only today - it is in the chat
+    # itself, not a similar thing from another day. Not after a day ("那天下午", "周三早上"), nor beside words that point back.
+    m = _TODAY_PART.search(text)
+    if m and not re.search(r"上次|上回|那次|那回|那天|以前|之前|还记得|记得吗|有一次|有次", text):
+        return {"after": d(today), "before": d(today), "today": True, "label": m.group(0)}
     week_start = today - timedelta(days=today.weekday())
     if "上上周" in text or "上上个星期" in text:
         return {"after": d(week_start - timedelta(days=14)), "before": d(week_start - timedelta(days=8)), "label": "上上周"}
@@ -297,6 +303,7 @@ def time_window(query: str, now: datetime | None = None) -> dict | None:
     return None
 
 
+_TODAY_PART = re.compile(r"刚才|刚刚|今早|(?<![天日号周期一二三四五六七八九十\d])(?:上午|早上|早晨|中午|下午|傍晚)")
 _TIME_WORDS = re.compile(r"(?:\d{1,2}|[一两二三四五六七八九十]|十[一二])个月前|(?:1[0-2]|[1-9]|十[一二]?|[一二三四五六七八九])月(?![\d一二三四五六七八九十日号初上中下底末份])|(?:\d{4}年)?(?:1[0-2]|[1-9]|十[一二]?|[一二三四五六七八九]|上个?|这个?|本)?月(?:初|上旬|中旬|中|下旬|底|末)份?|(?:1[0-2]|[1-9]|十[一二]?|[一二三四五六七八九])月份|\d{4}年\d{0,2}月?\d{0,2}[日号]?|\d{1,2}月\d{1,2}[日号]|上上个?周|上上个?星期|上个?周|上个?星期|这个?周|本周|这个?星期|上个?月|这个?月|本月|前天|昨天|昨晚|今天|今晚|去年|今年|最近|那天|前几天")
 _FILLER = re.compile(r"[发生做干聊说有了什么啥事情的吗呢吧啊呀哪些都过我你们咱在是不?？!！。，,\s]")
 
@@ -642,14 +649,35 @@ class MemoryRead:
         # --- Intent (DeepSeek): does this message need long-term memory at all, and what is really being looked for
         gate_mode = gate_module.mode(body.get("gate")) if policy == "inject" else "off"
         gated = gate_mode != "off" and self.gate.available()
-        history = bool(HISTORY_CUE.search(query)) or bool(gated and names_module.mentioned(self.store, query))
-        seek, need, degraded = "", None, None
+        # A name alone is not the past (2026-10-18, the user's rule: the assistant knows who the people in the lexicon are;
+        # only asking about them brings their memories up).
+        history = bool(HISTORY_CUE.search(query))
+        seek, need, degraded, asked_past = "", None, None, False
+        # --- Local need gate (experimental, off unless asked: body needGate / PENUMBRA_NEED_GATE=1). A message about now
+        # gets at most who the names in it are; no search, no DeepSeek call. A name never asks for an Episode search.
+        if policy == "inject" and (body.get("needGate") is True or self._need_gate_on()):
+            verdict_local = need_module.judge(self.store, query, recent)
+            stages.append({"stage": "need", **verdict_local})
+            if verdict_local["episode"] == "direct":
+                named = names_module.mentioned(self.store, query) if history else []
+                carried = self._seen(conversation_id, session_id) if named else set()
+                fresh = [n for n in named if n.get("profile") and ("name", n["name_id"], _profile_version(n["profile"])) not in carried]
+                if named:
+                    stages.append({"stage": "names", "named": [n["name"] for n in named], "boosted": 0, "added": 0,
+                                   "profiles": [[n["name_id"], _profile_version(n["profile"])] for n in fresh]})
+                profiles = [{"name": n["name"], "profile": n["profile"]} for n in fresh]
+                status = "LOCKED" if profiles else "NO_MEMORY_NEEDED"
+                result = {"status": status, "turn_id": turn_id, "query": query, "patterns": [], "episodes": [], "documents": [], "profiles": profiles, "refs": [],
+                          "reused_lock": False, "search_count": 0, "time_window": window, "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+                          "degraded": None, "retry_hint": False, "trace": {"stages": stages, "engine": None}}
+                return result if dry else self._record(result, policy, conversation_id, window)
         if gated and gate_mode in ("on", "intent"):
             known = [f"{n['name']}（{n['kind']}）" + (f"：{(n.get('note') or n.get('profile') or '')[:120]}" if n.get("note") or n.get("profile") else "")
                      for n in names_module.mentioned(self.store, query)]
             intent = self.gate.intent(query, recent, timeout_s=min(gate_module.CALL_TIMEOUT_S, gate_module.BUDGET_S), names=known)
             stages.append({"stage": "intent", **intent})
             need = intent.get("need")
+            asked_past = need == "yes"
             skip = None
             if need == "none" and not RECALL_CUE.search(query):
                 skip = "intent: none"
@@ -739,13 +767,20 @@ class MemoryRead:
                     scores = self.reranker.scores(query, [f"{_day_words(h['effectiveAt'])} {h['content'][:400]}" for h in added]) or [0.0] * len(added)
                     added = [h for h, sc in zip(added, scores) if sc >= RESCUE_WINDOW_SCORE]
                 hits.extend(added)
-            if pure_time:  # nothing but a time: the window is the question, so what lies outside it does not answer it
+            if pure_time or window.get("today"):
+                # nothing but a time: the window is the question, so what lies outside it does not answer it. And a part
+                # of today ("上午", "刚才") asks about today: a similar thing on another day is not it.
                 hits = [h for h in hits if in_window(h)]
             hits.sort(key=lambda h: -h["score"])
             stages.append({"stage": "time", "window": window, "boosted": boosted, "added": len(added)})
         # --- Names: what she names from her 专名库 is a precise hit, under any of its names
+        # --- Names come in only when she asks about the past (上次 / 还记得 / 说好…): a name said in passing, or a
+        # question about the two of them now, needs nothing - he knows who they are (her persona prompt says so). Then no profile, no boost, no extra memory.
         named = names_module.mentioned(self.store, meaning if meaning != search_text else query)
         profiles: list[dict] = []
+        if named and not history:
+            stages.append({"stage": "names", "named": [n["name"] for n in named], "skipped": "not asked about the past"})
+            named = []
         if named:
             words = [w for n in named for w in n["words"]]
             have = {h["hitId"]: h for h in hits}
@@ -758,16 +793,29 @@ class MemoryRead:
                     found_named.append(("PATTERN", p["pattern_id"], 0.8, p["current_state_since"] or p["valid_from"], p["title"], []))
             found_named.sort(key=lambda x: (-x[2], x[3] or ""), reverse=False)
             label = "、".join(n["name"] for n in named)
-            boosted, added_named = 0, 0
+            boosted, name_only = 0, []
             for kind, ident, importance, when, text, sources in found_named:
                 if ident in have:
                     have[ident]["score"] = round(have[ident]["score"] * 1.3, 4)
                     have[ident].setdefault("signals", {})["named"] = label
                     boosted += 1
-                elif added_named < MAX_NAMED:
-                    hits.append({"hitId": ident, "kind": kind, "score": round(0.5 + 0.4 * importance, 4), "effectiveAt": when, "title": text[:40], "content": text,
-                                 "sourceOriginalIds": sources, "signals": {"named": label}, "reason": f"名字：{label}"})
-                    added_named += 1
+                elif len(name_only) < MAX_NAMED:
+                    name_only.append({"hitId": ident, "kind": kind, "score": round(0.5 + 0.4 * importance, 4), "effectiveAt": when, "title": text[:40], "content": text,
+                                      "sourceOriginalIds": sources, "signals": {"named": label}, "reason": f"名字：{label}"})
+            # A memory that only shares the name comes in where the cross-encoder finds it answers the message (2026-10-16:
+            # the same person on another occasion were her wrong recalls - the profile already says who it is). The
+            # message is read with each alias as the name, so "糕糕" meets a memory written with "年糕". Without the
+            # cross-encoder they come in as before; body namesAdd: true skips the check, for a comparison.
+            if name_only and body.get("namesAdd") is not True:
+                asked = query
+                for n in named:
+                    for w in n["said"]:
+                        asked = asked.replace(w, n["name"]) if w != n["name"] else asked
+                scores = self.reranker.scores(asked, [h["content"][:400] for h in name_only])
+                if scores is not None:
+                    name_only = [h for h, sc in zip(name_only, scores) if sc >= RESCUE_SCORE]
+            hits.extend(name_only)
+            added_named = len(name_only)
             hits.sort(key=lambda h: -h["score"])
             # A profile travels once per Claude session (and again when it was rewritten), not with every mention.
             carried = self._seen(conversation_id, session_id) if policy == "inject" else set()
@@ -900,14 +948,11 @@ class MemoryRead:
                 verdict = self.gate.judge(query, body.get("recent") or [], seek, docs, timeout_s=min(gate_module.CALL_TIMEOUT_S, left))
             if "keep" in verdict:
                 kept_ids = {(cands[i][0], cands[i][1]) for i in verdict["keep"]}
-            elif need == "yes" or history or gate_mode == "judge":
-                # unverified: only what words, a name or an entity agree on (not the embedding alone)
-                kept_ids = {("pattern", pid) for pid, g in ranked if not g["weak"] or g.get("named")}
-                kept_ids |= {("episode", eid) for eid, h in orphans.items() if not _semantic_only(h) or (h.get("signals") or {}).get("named")}
-                degraded = degraded or f"judge_{verdict.get('failure', 'error')}_strong_only"
             else:
+                # The judge did not answer: nothing unverified is handed over as if it were checked. A turn that
+                # needed the past gets retry_hint instead, so he can recall it himself.
                 kept_ids = set()
-                degraded = degraded or f"judge_{verdict.get('failure', 'error')}_dropped"
+                degraded = f"{degraded}+judge_{verdict.get('failure', 'error')}_dropped" if degraded else f"judge_{verdict.get('failure', 'error')}_dropped"
             ranked = [(pid, g) for pid, g in ranked if ("pattern", pid) in kept_ids]
             orphans = {eid: h for eid, h in orphans.items() if ("episode", eid) in kept_ids}
             verdict["dropped"] = [f"{k}:{i}" for k, i, _ in cands if (k, i) not in kept_ids]
@@ -942,9 +987,15 @@ class MemoryRead:
         status = "LOCKED" if (patterns or episodes or docs or profiles) else "NO_MEMORY_NEEDED"
         stages.append({"stage": "threshold", "status": status, "patterns": len(patterns), "episodes": len(episodes)})
         engine_trace = RetrievalCore.trace(found)
+        # Counts only, kept in the logged trace: what the engine found and where its candidates ended (final / deduped /
+        # below a threshold / seen), so a miss can be told apart: local gate, intent, candidate filtering, judge, injection.
+        ends: dict[str, int] = {}
+        for c in engine_trace.get("candidates") or []:
+            ends[c.get("stage") or "?"] = ends.get(c.get("stage") or "?", 0) + 1
+        stages.append({"stage": "engine", "candidates": len(engine_trace.get("candidates") or []), "ends": ends})
         refs = [{"kind": "pattern", "id": p["pattern_id"], "version": p["version"]} for p in patterns] + [{"kind": "episode", "id": e["episode_id"], "version": e["version"]} for e in episodes]
         latency = round((time.perf_counter() - started) * 1000, 1)
-        retry_hint = bool(degraded and history and status == "NO_MEMORY_NEEDED")
+        retry_hint = bool(degraded and (HISTORY_CUE.search(query) or asked_past or gate_mode == "judge") and status == "NO_MEMORY_NEEDED")
         if gated:
             self._gate_stats(intent=next((st for st in stages if st["stage"] == "intent"), None), judge=verdict, degraded=degraded, status=status, dry=dry)
         result = {"status": status, "turn_id": turn_id, "query": query, "patterns": patterns, "episodes": episodes, "documents": docs, "profiles": profiles,
@@ -952,6 +1003,26 @@ class MemoryRead:
                   "refs": refs, "reused_lock": False,
                   "search_count": 1, "time_window": window, "latency_ms": latency, "trace": {"stages": stages, "engine": engine_trace}}
         return result if dry else self._record(result, policy, conversation_id, window)
+
+    def _need_gate_on(self) -> bool:
+        """PENUMBRA_NEED_GATE=1/0 in the environment wins; otherwise data/switches.json {"need_gate": true}, read again
+        whenever the file changes - so the gate can be switched off at once, without a restart."""
+        env = os.environ.get("PENUMBRA_NEED_GATE", "")
+        if env in ("0", "1"):
+            return env == "1"
+        path = self.svc.config.data_dir / "switches.json"
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            return False
+        cached = getattr(self, "_switches", None)
+        if not cached or cached[0] != stamp:
+            try:
+                value = json.loads(path.read_text("utf-8")).get("need_gate") is True
+            except (OSError, ValueError, AttributeError):
+                value = False
+            self._switches = cached = (stamp, value)
+        return cached[1]
 
     def _gate_stats(self, *, intent: dict | None, judge: dict | None, degraded: str | None, status: str, dry: bool) -> None:
         """Running counts of the gate's calls, its failures, the degradations and what reached the turn (kv gate_stats)."""

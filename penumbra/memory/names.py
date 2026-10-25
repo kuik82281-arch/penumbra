@@ -37,7 +37,10 @@ _CJK = re.compile(r"[㐀-䶿一-鿿豈-﫿]")
 def ensure_schema(store: Store) -> None:
     store.db.executescript(SCHEMA)
     have = {r[1] for r in store.db.execute("PRAGMA table_info(names)")}
-    for col, decl in (("profile", "TEXT NOT NULL DEFAULT ''"), ("profile_at", "TEXT"), ("profile_basis", "TEXT NOT NULL DEFAULT ''")):
+    # relation: what they are to her; sources: the RAW ids she said it in; confirmed: 1 = she said so herself (every
+    # entry kept by hand so far is), 0 = inferred and not yet confirmed by her.
+    for col, decl in (("profile", "TEXT NOT NULL DEFAULT ''"), ("profile_at", "TEXT"), ("profile_basis", "TEXT NOT NULL DEFAULT ''"),
+                      ("relation", "TEXT NOT NULL DEFAULT ''"), ("sources", "TEXT NOT NULL DEFAULT '[]'"), ("confirmed", "INTEGER NOT NULL DEFAULT 1")):
         if col not in have:
             store.db.execute(f"ALTER TABLE names ADD COLUMN {col} {decl}")
 
@@ -46,7 +49,9 @@ def _view(row) -> dict:
     keys = row.keys()
     return {"name_id": row["name_id"], "name": row["name"], "aliases": json.loads(row["aliases"]), "kind": row["kind"], "note": row["note"],
             "created_at": row["created_at"], "updated_at": row["updated_at"],
-            "profile": row["profile"] if "profile" in keys else "", "profile_at": row["profile_at"] if "profile_at" in keys else None}
+            "profile": row["profile"] if "profile" in keys else "", "profile_at": row["profile_at"] if "profile_at" in keys else None,
+            "relation": row["relation"] if "relation" in keys else "", "sources": json.loads(row["sources"]) if "sources" in keys else [],
+            "confirmed": bool(row["confirmed"]) if "confirmed" in keys else True}
 
 
 def all_names(store: Store) -> list[dict]:
@@ -68,14 +73,20 @@ def save(store: Store, body: dict) -> dict:
     note = str(body.get("note") or "").strip()[:200]
     ident = str(body.get("name_id") or "")
     with store.tx() as db:
-        if ident:
-            if not db.execute("SELECT 1 FROM names WHERE name_id = ?", (ident,)).fetchone():
-                raise NotFound(f"no name {ident}")
-            db.execute("UPDATE names SET name=?, aliases=?, kind=?, note=?, updated_at=? WHERE name_id=?",
-                       (name, json.dumps(aliases, ensure_ascii=False), kind, note, now_iso(), ident))
+        old = db.execute("SELECT * FROM names WHERE name_id = ?", (ident,)).fetchone() if ident else None
+        if ident and old is None:
+            raise NotFound(f"no name {ident}")
+        # A field the caller leaves out keeps what it was (an older client knows nothing of relation/sources/confirmed).
+        relation = str(body["relation"]).strip()[:60] if "relation" in body else (old["relation"] if old else "")
+        sources = ([str(s)[:64] for s in body.get("sources") or []][:20] if "sources" in body else (json.loads(old["sources"]) if old else []))
+        confirmed = (1 if body["confirmed"] else 0) if "confirmed" in body else (old["confirmed"] if old else 1)
+        if old:
+            db.execute("UPDATE names SET name=?, aliases=?, kind=?, note=?, relation=?, sources=?, confirmed=?, updated_at=? WHERE name_id=?",
+                       (name, json.dumps(aliases, ensure_ascii=False), kind, note, relation, json.dumps(sources), confirmed, now_iso(), ident))
         else:
             ident = mint("name")
-            db.execute("INSERT INTO names (name_id, name, aliases, kind, note, created_at, updated_at) VALUES (?,?,?,?,?,?,?)", (ident, name, json.dumps(aliases, ensure_ascii=False), kind, note, now_iso(), now_iso()))
+            db.execute("INSERT INTO names (name_id, name, aliases, kind, note, relation, sources, confirmed, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       (ident, name, json.dumps(aliases, ensure_ascii=False), kind, note, relation, json.dumps(sources), confirmed, now_iso(), now_iso()))
     store.audit("name.saved", ident, after={"name": name, "aliases": aliases}, actor=identity.USER_ACTOR)
     return _view(store.one("SELECT * FROM names WHERE name_id = ?", (ident,)))
 

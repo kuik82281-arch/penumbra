@@ -92,6 +92,15 @@ class SchedulerTest(Base):
         morning = self.tick(70, activity="2026-09-01T23:00:00.000Z")  # 08:10: morning re-check
         self.assertEqual((morning["triggered"], morning["reason"]), (True, "morning_recheck"))
 
+    def test_any_hour_writes_a_quiet_stretch_by_day(self):
+        self.memory.pipeline.update_settings({"idle_minutes": 50, "any_hour": True})
+        self.touch("2026-09-01T23:00:00.000Z")  # 07:00 local
+        busy = self.tick(40, activity="2026-09-01T23:00:00.000Z")  # 07:40: not quiet long enough yet
+        self.assertEqual((busy["triggered"], busy["reason"]), (False, "active_or_outside_window"))
+        day = self.tick(55, activity="2026-09-01T23:00:00.000Z")  # 07:55: outside the windows, 55 quiet minutes
+        self.assertEqual((day["triggered"], day["reason"]), (True, "idle"))
+        self.assertTrue(self.memory.pipeline.settings()["any_hour"])
+
     def test_last_activity_persists_across_a_restart(self):
         self.svc.close()
         self.open()

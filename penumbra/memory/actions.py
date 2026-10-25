@@ -573,6 +573,7 @@ def apply_plan(store: Store, plan: Plan, candidate_id: str | None, decision_id: 
                 applied["episodes_merged"].append({"into": merged["episode_id"], "from": a["episode_ids"]})
                 for old in olds:
                     store.update_episode(old["episode_id"], {"status": "merged", "superseded_by": merged["episode_id"]}, actor=actor, reason=f"merged into {merged['episode_id']}", decision_id=decision_id)
+                threads_module.relink_merged(store, a["episode_ids"], merged["episode_id"], decision_id)
                 for pat in store.patterns(status="active"):
                     if set(pat["supporting_episode_ids"]) & set(a["episode_ids"]):
                         support = _union([merged["episode_id"] if e in a["episode_ids"] else e for e in pat["supporting_episode_ids"]])

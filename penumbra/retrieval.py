@@ -567,6 +567,10 @@ class RetrievalCore:
         return True
 
     def _keep_original_row(self, row, req: RetrievalRequest, debug: dict) -> bool:
+        memory = getattr(self.svc, "memory", None)
+        if memory is not None and row["id"] in memory.store.rolled_raw_ids():  # chat she rolled back: not there to be found
+            debug["excluded"]["filters"] += 1
+            return False
         if row["id"] in req.exclude_ids:
             debug["excluded"]["explicit"] += 1
             return False

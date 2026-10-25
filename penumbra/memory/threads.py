@@ -52,9 +52,13 @@ CREATE INDEX IF NOT EXISTS thread_links_episode ON thread_links(episode_id);
 
 def ensure_schema(store: Store) -> None:
     store.db.executescript(SCHEMA)
-    if "aliases" not in {r[1] for r in store.db.execute("PRAGMA table_info(threads)")}:
+    have = {r[1] for r in store.db.execute("PRAGMA table_info(threads)")}
+    if "aliases" not in have:
         # How she might call the whole story ("找工作", "求职"): searchable on every step of it.
         store.db.execute("ALTER TABLE threads ADD COLUMN aliases TEXT NOT NULL DEFAULT '[]'")
+    if "story_basis" not in have:
+        # The Episodes (id@version) a written story was told from: when they change, the story is written again.
+        store.db.execute("ALTER TABLE threads ADD COLUMN story_basis TEXT NOT NULL DEFAULT ''")
 
 
 def _clean_aliases(raw) -> list[str]:
@@ -73,10 +77,12 @@ def _touch_steps(store: Store, thread_id: str) -> None:
 
 
 def _episode_time(store: Store, episode_id: str) -> str:
+    """When a step happened; "" for an Episode that is no step any more (deleted, or merged into another)."""
     try:
-        return store.episode(episode_id)["time_start"]
+        ep = store.episode(episode_id)
     except NotFound:
         return ""
+    return ep["time_start"] if ep.get("status", "active") == "active" else ""
 
 
 # ------------------------------------------------------------ reading
@@ -219,6 +225,25 @@ def attach_proposal(store: Store, episode_id: str, proposal: dict, decision_id: 
     return {"thread_id": tid, "status": status, "new": True}
 
 
+RANK = {"approved": 3, "auto": 2, "pending": 1}
+
+
+def relink_merged(store: Store, old_ids: list[str], merged_id: str, decision_id: str | None) -> list[str]:
+    """MERGE_EPISODE (inside its transaction): every thread a merged-away Episode was on now has the merged Episode in its
+    place, with the strongest live status the old links had (approved > auto > pending; a refusal is not a link). The old
+    links are kept as 'merged' (history), and count for nothing."""
+    marks = ",".join("?" * len(old_ids))
+    best: dict[str, str] = {}
+    for r in store.all(f"SELECT thread_id, status FROM thread_links WHERE episode_id IN ({marks})", tuple(old_ids)):
+        if r["status"] in RANK and RANK[r["status"]] > RANK.get(best.get(r["thread_id"], ""), 0):
+            best[r["thread_id"]] = r["status"]
+    store.db.execute(f"UPDATE thread_links SET status='merged', reason=?, decided_at=? WHERE episode_id IN ({marks}) AND status != 'rejected'",
+                     (f"merged into {merged_id}", now_iso(), *old_ids))
+    for tid, status in best.items():
+        _link(store, tid, merged_id, status, None, "merged Episode takes the place of its parts", decision_id, "merge")
+    return list(best)
+
+
 # ------------------------------------------------------------ the user's decisions
 
 def decide(store: Store, body: dict) -> dict:
@@ -277,7 +302,32 @@ def write_story(store: Store, client, thread_id: str) -> dict:
     if not story:
         raise Invalid("DeepSeek returned no story")
     with store.tx() as db:
-        db.execute("UPDATE threads SET story = ?, story_version = story_version + 1, story_at = ?, updated_at = ? WHERE thread_id = ?",
-                   (story[:4000], now_iso(), now_iso(), thread_id))
+        db.execute("UPDATE threads SET story = ?, story_version = story_version + 1, story_at = ?, story_basis = ?, updated_at = ? WHERE thread_id = ?",
+                   (story[:4000], now_iso(), _story_basis(store, thread_id), now_iso(), thread_id))
     store.audit("thread.story", thread_id, after={"episodes": len(steps), "usage": meta.get("usage", {})}, actor="deepseek")
     return thread(store, thread_id)
+
+
+def _story_basis(store: Store, thread_id: str) -> str:
+    return ",".join(f"{s['episode_id']}@{store.episode(s['episode_id'])['version']}" for s in links(store, thread_id))
+
+
+def refresh_stories(store: Store, client) -> list[str]:
+    """After a curation run: a closed thread's story whose Episodes changed (edited, merged, added, gone) is written
+    again, from the Episodes. A story written before its basis was kept is only given its basis now, not rewritten.
+    A failure leaves it as it was, for the next run."""
+    done = []
+    for row in store.all("SELECT thread_id, story_basis FROM threads WHERE status = 'closed' AND story != ''"):
+        basis = _story_basis(store, row["thread_id"])
+        if not row["story_basis"]:
+            with store.tx() as db:
+                db.execute("UPDATE threads SET story_basis = ? WHERE thread_id = ?", (basis, row["thread_id"]))
+            continue
+        if basis == row["story_basis"]:
+            continue
+        try:
+            write_story(store, client, row["thread_id"])
+            done.append(row["thread_id"])
+        except Exception as error:  # noqa: BLE001 - the next run tries again; the old story stays meanwhile
+            store.audit("thread.story_failed", row["thread_id"], after={"error": f"{type(error).__name__}: {error}"[:300]}, actor="deepseek")
+    return done

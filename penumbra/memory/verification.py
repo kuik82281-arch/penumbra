@@ -14,13 +14,22 @@ from .actions import ALL_ACTIONS
 from .discovery import speaker
 from .llm import DeepSeekClient
 
-PROMPT_VERSION = "verify-v15"
+PROMPT_VERSION = "verify-v16"
 
+
+
+def _pronouns(role: str) -> str:
+    """Whose 我 / 你 / 他 / 她 a line uses: they flip with the speaker, and a memory told from one side mixed them up."""
+    me, other = speaker(role), speaker("assistant" if role == "user" else "user")
+    if role not in ("user", "assistant"):
+        return ""
+    third = "她" if role == "assistant" else "他"
+    return f"这句里：我 = {me}；你 / {third} = {other}；括号或代码块里的动作描写也是 {me} 写的，主语照这个对应"
 
 
 def _render(record: dict) -> dict:
     return {
-        "id": record["id"], "speaker": speaker(record.get("role", "")), "createdAt": record.get("createdAt"), "content": str(record.get("content") or ""),
+        "id": record["id"], "speaker": speaker(record.get("role", "")), "pronouns": _pronouns(record.get("role", "")), "createdAt": record.get("createdAt"), "content": str(record.get("content") or ""),
         **({"kind": "his_day_memory"} if record.get("sourceType") == "assistant_day_memory" else {}),
         "attachments": [{"attachment_id": a.get("attachment_id"), "caption": a.get("caption") or "", "mime_type": a.get("mime_type"),
                          "looks_like": str(a.get("searchable_text") or "")[:400]}

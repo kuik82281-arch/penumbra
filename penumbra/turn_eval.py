@@ -45,6 +45,7 @@ STATE = PACKAGE_ROOT / "eval" / "state"
 REPORTS = PACKAGE_ROOT / "eval" / "reports"
 SERVICE = "http://127.0.0.1:8790"
 PARALLEL = 1
+PAUSE = 0.0
 
 RECALL_CUE = re.compile(r"上次|上回|还记得|记不记得|记得吗|那次|那回|那天|之前|以前|说过|讲过|聊过")
 RITUAL_ONLY = re.compile(r"^(?:早安|早上好|早|午安|晚安|晚安安|好梦|抱|亲亲|亲|摸摸|蹭蹭|嗯+|哦+|噢+|啊+|呜+|好的?|好呀|行|收到|ok|哈+|嘿+|嘻+|在吗|在嘛|在不在|"
@@ -169,8 +170,15 @@ def run_labeled(path: str, extra: dict, label: str) -> None:
     def run(case: dict) -> dict:
         turn = turns[case["id"]]
         search, why = memory_gate(turn["message"])
+        if search and PAUSE:
+            time.sleep(PAUSE)
         result = retrieve(turn, extra) if search else {"status": "GATED", "_ms": 0}
         stages = {s["stage"]: s for s in (result.get("trace") or {}).get("stages", [])}
+        if (stages.get("intent") or {}).get("breaker") and PAUSE:
+            # the gate's breaker was open from an earlier case's timeouts: a real turn, minutes apart, would have asked
+            time.sleep(61)
+            result = retrieve(turn, extra)
+            stages = {s["stage"]: s for s in (result.get("trace") or {}).get("stages", [])}
         keys = [k for k, _ in delivered(result)]
         leaks = [k for k in keys if turn["at"] and born.get(k.split(":", 1)[1], "") >= turn["at"]]
         kept = [k for k in keys if k not in leaks]
@@ -183,7 +191,10 @@ def run_labeled(path: str, extra: dict, label: str) -> None:
             where = ("host gate" if not search else "intent said none" if intent.get("need") == "none"
                      else "intent failed" if intent.get("error") else "judge dropped it" if dropped
                      else "judge failed" if judge.get("error") else "not retrieved")
+        calls = [stages[k] for k in ("intent", "judge") if k in stages and stages[k].get("latency_ms")]
         return {"id": case["id"], "category": case["category"], "need": case["need"], "message": turn["message"][:60], "status": result.get("status"),
+                "deepseekCalls": len(calls), "tokens": sum(int((c.get("usage") or {}).get(k) or 0) for c in calls for k in ("inputTokens", "outputTokens")),
+                "searched": bool(result.get("trace", {}).get("engine")), "localGate": (stages.get("need") or {}).get("episode"),
                 "delivered": kept, "leaks": leaks, "irrelevant": irrelevant, "hit": hit, "blocked": where, "ms": result["_ms"],
                 "degraded": result.get("degraded"), "intent": (stages.get("intent") or {}).get("need"), "seek": (stages.get("intent") or {}).get("seek")}
 
@@ -224,9 +235,11 @@ def main() -> None:
     parser.add_argument("--service", default=SERVICE, help="a Penumbra to replay against (e.g. a copy of the data on another port)")
     parser.add_argument("--labeled", help="score against a fixed, hand-labelled set (eval/turns-labeled.json)")
     parser.add_argument("--parallel", type=int, default=1, help="labeled cases at once (1 = like production)")
+    parser.add_argument("--pause", type=float, default=0, help="seconds between searched cases, like turns of a chat; a case the gate's breaker skipped is asked again after it closes")
     args = parser.parse_args()
     globals()["SERVICE"] = args.service
     globals()["PARALLEL"] = args.parallel
+    globals()["PAUSE"] = args.pause
     extra = json.loads(args.body)
     health = json.loads(urllib.request.urlopen(f"{SERVICE}/memory-core/health", timeout=10).read())
     if not (health.get("embedding") or {}).get("ready"):

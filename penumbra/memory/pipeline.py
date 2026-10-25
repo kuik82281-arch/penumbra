@@ -58,7 +58,7 @@ BACKOFF_CAP_S = 6 * 3600
 NOTE_SOURCE = "manual_note"
 
 LAST_ACTIVITY_KEY = "last_activity_at"  # kv key: the one place the time of the last new RAW is kept
-DEFAULT_SETTINGS = {"idle_minutes": 30, "night_start": 22, "night_end": 6, "morning_hour": 8, "utc_offset": 8, "enabled": True}
+DEFAULT_SETTINGS = {"idle_minutes": 30, "night_start": 22, "night_end": 6, "morning_hour": 8, "utc_offset": 8, "enabled": True, "any_hour": False}
 SETTING_BOUNDS = {"idle_minutes": (0, 1440), "night_start": (0, 23), "night_end": (0, 23), "morning_hour": (0, 23), "utc_offset": (-12, 14)}
 
 
@@ -162,7 +162,7 @@ class Pipeline:
 
     def unprocessed_raw(self) -> list[dict]:
         """Chat RAW no window has covered yet, oldest first. Manual notes are already memories and never re-enter."""
-        done = self._processed_raw()
+        done = self._processed_raw() | self.core.store.rolled_raw_ids()  # chat she rolled back is never read again
         with self.core.service.lock:
             rows = self.core.service.conn.execute(
                 "SELECT id, conversation_id, role, content, created_at, source_type FROM originals WHERE source_type != ? ORDER BY created_at, rowid", (NOTE_SOURCE,)).fetchall()
@@ -232,7 +232,8 @@ class Pipeline:
             rows = self.core.service.conn.execute(
                 "SELECT id, created_at FROM originals WHERE conversation_id = ? AND source_type != ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (msgs[0]["conversationId"], NOTE_SOURCE, msgs[0]["createdAt"], LINK_TAIL_MSGS)).fetchall()
-        return [r["id"] for r in reversed(rows) if self._ts(r["created_at"]).isoformat() >= since]
+        rolled = self.core.store.rolled_raw_ids()
+        return [r["id"] for r in reversed(rows) if self._ts(r["created_at"]).isoformat() >= since and r["id"] not in rolled]
 
     def _stage_session(self, run_id: str, msgs: list[dict]) -> dict:
         window_id = mint("window")
@@ -253,7 +254,12 @@ class Pipeline:
 
     def pending_work(self) -> dict:
         staging_due = sum(1 for r in self.store.all("SELECT next_attempt_at FROM candidates WHERE status='STAGING'") if _due(r["next_attempt_at"]))
-        unprocessed = len(self.unprocessed_raw())
+        # Counted from ids alone: this runs every 30 s, and loading every original's text for a count is what ran out of
+        # memory on 2026-10-22 (MemoryError while another program held most of the RAM).
+        done = self._processed_raw() | self.core.store.rolled_raw_ids()
+        with self.core.service.lock:
+            ids = self.core.service.conn.execute("SELECT id FROM originals WHERE source_type != ?", (NOTE_SOURCE,)).fetchall()
+        unprocessed = sum(1 for r in ids if r["id"] not in done)
         return {"unprocessedRaw": unprocessed, "stagingDue": staging_due, "any": bool(unprocessed or staging_due)}
 
     # ------------------------------------------------------------ discovery of one window
@@ -347,17 +353,31 @@ class Pipeline:
         try:
             plan = validate_answer(answer, allowed, self.store)
             base.update(confidence=plan.confidence, reason=plan.reason, actions=plan.actions)
+            # Held: what the model could not place (does this belong to an existing Episode?) waits alone for her review;
+            # the rest of the segment goes on. Each held item is validated like any action now, so a broken one sends the
+            # whole decision to QUARANTINE as before; a held item may not lean on the refs (e1, p1) of the applied ones.
+            held_raw = answer.get("held") if isinstance(answer, dict) else None
+            held_raw = [h for h in held_raw if isinstance(h, dict)] if isinstance(held_raw, list) else []
+            held = [validate_answer({"actions": [{k: v for k, v in h.items() if k not in ("hold_reason", "maybe_episode_id")}], "confidence": 1.0}, allowed, self.store,
+                                    lenient_confidence=True).actions[0] for h in held_raw]
+            if held and plan.terminal not in (None, "NO_ACTION"):
+                raise Invalid(f"held items cannot come with {plan.terminal}")
             # Verified quotes: what it puts in quotation marks must have been said (in this RAW, or already quoted in a
             # memory it was shown). Otherwise nothing is applied and the user sees it in QUARANTINE.
-            bad = unverified_quotes(plan_texts(plan.actions), [r["content"] for r in raw + context]
+            bad = unverified_quotes(plan_texts(plan.actions + held), [r["content"] for r in raw + context]
                                     + [e["content"] for e in episodes] + [p["narrative"] for p in patterns])
-            if bad and not plan.terminal:
+            if bad and not (plan.terminal and not held):
                 return self._finish(candidate_id, base, "QUARANTINE", errors=[f"unverified quote: “{q[:60]}”" for q in bad[:5]])
             if plan.terminal:
                 status = {"NO_ACTION": "NO_ACTION", "REJECT": "REJECTED", "QUARANTINE": "QUARANTINE"}[plan.terminal]
-                return self._finish(candidate_id, base, status, applied={})
+                with self.store.tx():
+                    held_ids = self._hold(row, held_raw, decision_id)
+                    return self._finish(candidate_id, base, status, applied={"held": held_ids} if held_ids else {})
             with self.store.tx():
                 applied = apply_plan(self.store, plan, candidate_id, decision_id)
+                held_ids = self._hold(row, held_raw, decision_id)
+                if held_ids:
+                    applied["held"] = held_ids
                 wrote = any(applied[k] for k in ("episodes_created", "episodes_updated", "episodes_merged", "patterns_created", "patterns_updated"))
                 if applied.get("tombstoned") and not wrote:  # all of it was something the user had deleted
                     return self._finish(candidate_id, base, "NO_ACTION", applied=applied, errors=["tombstoned: the user deleted this memory before; not created again"])
@@ -367,6 +387,33 @@ class Pipeline:
             base.setdefault("reason", "")
             base.setdefault("actions", [])
             return self._finish(candidate_id, base, "QUARANTINE", errors=[f"{type(error).__name__}: {error}"[:400]])
+
+    def _hold(self, row, held_raw: list[dict], decision_id: str) -> list[str]:
+        """Each held item becomes its own QUARANTINE candidate, inside the caller's transaction: its RAW is the item's own
+        evidence, and its decision carries the item as the model wrote it - so the Studio's review applies exactly that
+        (or her edit of it), validated again against that RAW then."""
+        if not held_raw:
+            return []
+        raw_ids, context_ids = set(json.loads(row["raw_ids"])), set(json.loads(row["context_raw_ids"] or "[]"))
+        made = []
+        with self.store.tx() as db:
+            for i, item in enumerate(held_raw):
+                evidence = [str(r) for r in item.get("source_raw_ids") or []]
+                cid, hold_decision = mint("cand"), mint("decision")
+                note = f"held: {str(item.get('hold_reason') or '')[:200]}" + (f" (maybe {item['maybe_episode_id']})" if item.get("maybe_episode_id") else "")
+                action = {k: v for k, v in item.items() if k not in ("hold_reason", "maybe_episode_id")}
+                db.execute("INSERT INTO candidates (candidate_id, run_id, window_id, origin, kind_hint, gist, entities, topics, raw_ids, context_raw_ids, digest, status, decision_id, last_error, created_at, updated_at) "
+                           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (cid, row["run_id"], row["window_id"], "hold", "", str(action.get("excerpt") or "")[:160], dumps([]), dumps([]),
+                            dumps([r for r in evidence if r in raw_ids]), dumps([r for r in evidence if r in context_ids]),
+                            f"hold:{decision_id}:{i}", "QUARANTINE", hold_decision, note[:400], now_iso(), now_iso()))
+                db.execute("INSERT INTO decisions (decision_id, candidate_id, provider, model, prompt_version, at, status, reason, actions, answer, errors, applied, usage, raw_hashes) "
+                           "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                           (hold_decision, cid, self.verifier.provider, self.verifier.model, PROMPT_VERSION, now_iso(), "QUARANTINE", note[:400],
+                            dumps([action]), dumps({"actions": [action], "held_from": decision_id}), dumps([note]), dumps({}), dumps({}), dumps({})))
+                made.append(cid)
+        self.store.audit("candidate.held", row["candidate_id"], after={"held": made, "decision_id": decision_id}, actor="deepseek", decision_id=decision_id)
+        return made
 
     def _finish(self, candidate_id: str, decision: dict | None, status: str, applied: dict | None = None, errors: list | None = None) -> str:
         with self.store.tx() as db:
@@ -449,6 +496,10 @@ class Pipeline:
             # The names whose memories changed get their profile rewritten (one LLM call each, only when something changed).
             if summary["statuses"].get("APPLIED") and self.verifier.available():
                 summary["profiles"] = len(names_module.refresh_profiles(self.store, self.verifier.client))
+            # Closed threads whose Episodes changed (by this run or by her hand since) get their story written again; a
+            # failure is tried again on the next run, so this runs whether or not this run wrote anything.
+            if self.verifier.available():
+                summary["stories"] = len(threads_module.refresh_stories(self.store, self.verifier.client))
             self.store.audit(f"run.{status}", run_id, after=summary)
             return {"run_id": run_id, "status": status, "summary": summary, "errors": errors}
         except Exception as error:
@@ -488,6 +539,8 @@ class Pipeline:
                 current[key] = value
         if "enabled" in payload:
             current["enabled"] = payload["enabled"] is True
+        if "any_hour" in payload:
+            current["any_hour"] = payload["any_hour"] is True
         self.store.kv_set("settings", current)
         self.store.audit("settings.updated", "settings", after=current, actor=identity.USER_ACTOR)
         return current
@@ -510,13 +563,15 @@ class Pipeline:
             last = datetime.fromisoformat((self.store.kv_get(LAST_ACTIVITY_KEY) or now.isoformat()).replace("Z", "+00:00"))
         except ValueError:
             last = now
-        if (now - last).total_seconds() < cfg["idle_minutes"] * 60 or not (night or morning):
+        # any_hour: a quiet stretch by day is written too, so what happened this afternoon is in memory within the hour,
+        # not only after midnight (2026-10-25: a morning outing was still unknown to a new session that evening).
+        if (now - last).total_seconds() < cfg["idle_minutes"] * 60 or not (night or morning or cfg.get("any_hour")):
             return {"triggered": False, "reason": "active_or_outside_window", **work}
         attempt = checkpoint.get("last_attempt_at")
         if attempt and (now - datetime.fromisoformat(attempt.replace("Z", "+00:00"))).total_seconds() < 300:
             return {"triggered": False, "reason": "retry_backoff", **work}
         self.store.kv_set("checkpoint", checkpoint | {"last_attempt_at": now.isoformat()})
-        reason = "night" if night else "morning_recheck"
+        reason = "night" if night else "morning_recheck" if morning else "idle"
         result = self.start_run(reason) if background else self.run(reason)
         return {"triggered": True, "reason": reason, "result": result, **work}
 
@@ -525,6 +580,8 @@ class Pipeline:
             while not self.stop.wait(30):
                 try:
                     self.tick()
+                    if self.store.kv_get("scheduler_error"):
+                        self.store.kv_set("scheduler_error", None)  # a good tick: the old error is history
                 except Exception as error:
                     self.store.kv_set("scheduler_error", {"at": now_iso(), "error": repr(error)[:300]})
         self.thread = threading.Thread(target=loop, daemon=True, name="memory-idle-scheduler")

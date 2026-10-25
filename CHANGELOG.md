@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.5.0 — 2026-10-25
+
+- Daytime consolidation: the idle scheduler takes an `any_hour` setting (`POST /memory-core/settings`, off by default).
+  With it on, a quiet stretch of `idle_minutes` is written to memory at any hour, not only in the night and morning
+  windows, so what happened this afternoon is searchable within the hour instead of after midnight.
+- Roll back: `POST /memory-core/forget-chat {conversationId, itemIds[]}` - chat the user took back is forgotten, and
+  Episodes told only from those messages go with it.
+- Names: the name lexicon keeps relation, sources (original ids) and a confirmed flag. A memory that only shares a name
+  with the message comes in only where the cross-encoder finds it really answers it, and a name said in passing about
+  now brings nothing unless the message asks about the past.
+- Time words: a part of today (this morning / just now / this afternoon) asks about today only - no similar thing from
+  another day.
+- Need gate (experimental, behind `PENUMBRA_NEED_GATE=1` or `data/switches.json {"need_gate": true}`, off by default): a
+  cheap local answer to "does this message lean on something from before".
+- Verification: an answer may carry `held` items the model cannot place yet; no fixed count of Episodes per segment;
+  old, continued and unsure experiences are told apart; one event is one Episode (continue an existing one before
+  creating another). Threads stay whole when Episodes are merged.
+- Each original line given to the writing model says whose I / you it uses, so pronouns do not flip with the speaker.
+- Scheduler: unprocessed originals are counted from ids alone (loading every text every 30 s ran out of memory).
+- Evaluation: `turn_eval --pause <s>` spaces searched cases like turns of a chat; a case the gate's breaker skipped is
+  asked again once it closes (back-to-back cases had tripped it and scores collapsed).
+
 ## v0.4.1 — 2026-10-11
 
 Found by reading a few days of real retrieval traces rather than the labelled set:

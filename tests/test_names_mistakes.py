@@ -9,10 +9,10 @@ class NamesTest(Base):
     def test_an_alias_finds_the_memory_written_with_the_name(self):
         eid = self.note("年糕今天吐了两次，带它去看了兽医，说是肠胃炎。", importance=0.6)
         self.note("你说今天的晚霞是粉紫色的。", importance=0.4)
-        before = self.memory.read.retrieve({"query": "糕糕最近好点没", "dry": True})
+        before = self.memory.read.retrieve({"query": "糕糕之前好点没", "dry": True})
         self.assertNotIn(eid, [e["episode_id"] for e in before["episodes"]], "without the 专名库, 糕糕 means nothing")
         names.save(self.memory.store, {"name": "年糕", "aliases": ["糕糕", "糕"], "kind": "宠物"})
-        after = self.memory.read.retrieve({"query": "糕糕最近好点没", "dry": True})
+        after = self.memory.read.retrieve({"query": "糕糕之前好点没", "dry": True})
         self.assertIn(eid, [e["episode_id"] for e in after["episodes"]])
         self.assertIn("names", [s["stage"] for s in after["trace"]["stages"]])
         self.assertEqual(names.mentioned(self.memory.store, "蛋糕好吃"), [], "a single character is not a name")
@@ -24,6 +24,25 @@ class NamesTest(Base):
             names.save(self.memory.store, {"name": "x", "kind": "不存在"})
         names.delete(self.memory.store, saved["name_id"])
         self.assertEqual(names.all_names(self.memory.store), [])
+
+    def test_relation_sources_and_confirmation_survive_an_older_client(self):
+        saved = names.save(self.memory.store, {"name": "小林", "kind": "人"})
+        self.assertEqual((saved["relation"], saved["sources"], saved["confirmed"]), ("", [], True), "kept by hand: confirmed")
+        saved = names.save(self.memory.store, {"name_id": saved["name_id"], "name": "小林", "kind": "人",
+                                               "relation": "同事", "sources": ["o_abc"], "confirmed": False})
+        self.assertEqual((saved["relation"], saved["sources"], saved["confirmed"]), ("同事", ["o_abc"], False))
+        # an edit that does not know the new fields leaves them as they were
+        saved = names.save(self.memory.store, {"name_id": saved["name_id"], "name": "小林", "kind": "人", "note": "常来找她"})
+        self.assertEqual((saved["relation"], saved["sources"], saved["confirmed"], saved["note"]), ("同事", ["o_abc"], False, "常来找她"))
+
+    def test_a_names_table_from_before_gains_the_new_fields(self):
+        db = self.memory.store.db
+        db.execute("DROP TABLE names")
+        db.execute("CREATE TABLE names (name_id TEXT PRIMARY KEY, name TEXT NOT NULL, aliases TEXT NOT NULL DEFAULT '[]', kind TEXT NOT NULL DEFAULT '其他', note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        db.execute("INSERT INTO names VALUES ('name_old', '年糕', '[]', '宠物', '', '2026-01-01', '2026-01-01')")
+        names.ensure_schema(self.memory.store)
+        old = names.all_names(self.memory.store)[0]
+        self.assertEqual((old["name"], old["relation"], old["sources"], old["confirmed"]), ("年糕", "", [], True))
 
 
 class MistakesTest(Base):
@@ -57,13 +76,13 @@ class ProfileTest(Base):
         self.assertEqual(names.refresh_profiles(self.memory.store, self.memory.verifier.client), [ident])
         self.assertEqual(len(calls[0]["memories"]), 2, "both memories, under either of its names")
         self.assertEqual(names.refresh_profiles(self.memory.store, self.memory.verifier.client), [], "nothing changed: no new call")
-        found = self.memory.read.retrieve({"query": "糕糕最近怎么样", "dry": True})
+        found = self.memory.read.retrieve({"query": "糕糕之前怎么样", "dry": True})
         self.assertEqual(found["profiles"], [{"name": "年糕", "profile": "年糕是你领养的橘猫，三岁，最近肠胃不好。"}])
         # once per Claude session: a turn that carried it and finished is not given it again at the next mention
-        ask = lambda turn: self.memory.read.retrieve({"query": "糕糕最近怎么样", "turnId": turn, "conversationId": "c1", "sessionId": "s1", "gate": "off"})  # noqa: E731
+        ask = lambda turn: self.memory.read.retrieve({"query": "糕糕之前怎么样", "turnId": turn, "conversationId": "c1", "sessionId": "s1", "gate": "off"})  # noqa: E731
         first = ask("t1")
         self.assertEqual(len(first["profiles"]), 1)
         self.memory.read.confirm(first["inject_id"], "c1", "s1", first["refs"])
         self.assertEqual(ask("t2")["profiles"], [])
-        other = self.memory.read.retrieve({"query": "糕糕最近怎么样", "turnId": "t3", "conversationId": "c1", "sessionId": "s2", "gate": "off"})
+        other = self.memory.read.retrieve({"query": "糕糕之前怎么样", "turnId": "t3", "conversationId": "c1", "sessionId": "s2", "gate": "off"})
         self.assertEqual(len(other["profiles"]), 1, "another session has not seen it")

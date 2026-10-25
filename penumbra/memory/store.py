@@ -528,6 +528,13 @@ class Store:
             out.update(json.loads(row["raw_ids"]))
         return out
 
+    def rolled_raw_ids(self) -> set[str]:
+        """The RAW ids of chat she rolled back (memory/roll.py): never mined, never found by a search of the originals."""
+        out: set[str] = set()
+        for row in self.all("SELECT raw_ids FROM tombstones WHERE kind = 'rolled'"):
+            out.update(json.loads(row["raw_ids"]))
+        return out
+
     def delete_pattern(self, pattern_id: str) -> None:
         with self.tx() as db:
             self.pattern(pattern_id)

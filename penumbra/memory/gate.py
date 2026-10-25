@@ -89,7 +89,7 @@ class MemoryGate:
         client = DeepSeekClient(timeout_s=min(CALL_TIMEOUT_S, timeout_s), max_retries=0)
         try:
             result = client._request(prompts.get(prompt), user, max_tokens)
-            return parse_json_answer(result["content"], result["finish_reason"]), {"latency_ms": ms()}
+            return parse_json_answer(result["content"], result["finish_reason"]), {"latency_ms": ms(), "usage": result.get("usage") or {}}
         except AnswerError as error:
             return None, {"latency_ms": ms(), "error": f"unusable answer ({error.kind})", "failure": "error"}
         except Exception as error:

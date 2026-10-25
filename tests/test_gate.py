@@ -74,12 +74,12 @@ class GateRetrieveTest(Base):
         r = self.retrieve("还记得我们吵架的时候你该怎么做吗", fake)
         self.assertEqual((r["status"], r["degraded"]), ("LOCKED", "intent_error_history"))
 
-    def test_judge_failing_keeps_only_strong_candidates_for_a_needed_memory(self):
+    def test_judge_failing_hands_over_nothing_unverified_even_for_a_needed_memory(self):
         down = WorkerError("network: timed out", 0)
         r = self.retrieve("还记得我们吵架的时候你该怎么做吗", FakeClient(intent=down, judge=down))
-        self.assertEqual((r["status"], r["degraded"]), ("LOCKED", "intent_timeout_history"), "words agree: kept")
+        self.assertEqual((r["status"], r["degraded"], r["retry_hint"]), ("NO_MEMORY_NEEDED", "intent_timeout_history+judge_timeout_dropped", True))
         r = self.retrieve("我们吵架了你该怎么做", FakeClient(intent={"need": "yes", "seek": "吵架后怎么安抚"}, judge=down), turn="turn-y")
-        self.assertEqual((r["status"], r["degraded"]), ("LOCKED", "judge_timeout_strong_only"))
+        self.assertEqual((r["status"], r["degraded"], r["retry_hint"]), ("NO_MEMORY_NEEDED", "judge_timeout_dropped", True))
 
     def test_judge_failing_on_a_maybe_brings_nothing_unverified(self):
         fake = FakeClient(intent={"need": "maybe", "seek": "吵架后怎么安抚"}, judge=WorkerError("HTTP 500: oops", 0))
@@ -90,7 +90,7 @@ class GateRetrieveTest(Base):
         fake = FakeClient(intent=WorkerError("network: timed out", 0), judge={"keep": []})
         r = self.retrieve("还记得我们吵架的时候你该怎么做吗", fake)
         self.assertEqual([k for k, _ in fake.calls], ["intent"], "the judge is not asked to time out a second time")
-        self.assertEqual((r["status"], r["degraded"]), ("LOCKED", "intent_timeout_history"), "strong candidates still come")
+        self.assertEqual((r["status"], r["retry_hint"]), ("NO_MEMORY_NEEDED", True), "unverified candidates stay out; he is told to recall")
 
     def test_a_history_question_left_with_nothing_asks_him_to_recall(self):
         down = WorkerError("network: timed out", 0)

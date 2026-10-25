@@ -6,6 +6,8 @@ POST /originals                          {source, conversationId, items[], conte
 GET  /originals/<id>                     the stored original with its provenance and attachments
 
 Unified memory: RAW -> Episode -> Pattern   (everything under /memory-core)
+POST /memory-core/forget-chat            {conversationId, itemIds[]} -> she rolled the chat back: Episodes told only from
+                                         those messages are deleted, the messages are never mined or searched again
 POST /memory-core/retrieve               {query, turnId, conversationId, sessionId, recent?, currentSession?} -> LOCKED | NO_MEMORY_NEEDED
                                          (the turn's one search, Patterns first; creates the turn's memory lock)
 POST /memory-core/confirm                {injectId, conversationId, sessionId, refs[{kind,id,version}]}  seen suppression, after the turn

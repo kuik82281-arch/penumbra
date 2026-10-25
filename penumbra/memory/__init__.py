@@ -26,6 +26,7 @@ from .store import Store, mint, normalize_time, now_iso
 from . import dreams as dreams_module
 from . import mistakes as mistakes_module
 from . import names as names_module
+from . import roll as roll_module
 from . import threads as threads_module
 from .verification import Verifier
 
@@ -355,6 +356,8 @@ class MemoryCore:
                 return mistakes_module.run(self)
             if parts == ["dreams"]:
                 return dreams_module.remember(self, body)
+            if parts == ["forget-chat"]:
+                return roll_module.forget_chat(self, body)
             if parts == ["dreams", "forget"]:
                 return dreams_module.forget(self, str(body.get("dreamId") or ""))
             if parts == ["threads", "decide"]:

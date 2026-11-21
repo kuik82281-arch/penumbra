@@ -98,12 +98,24 @@ HISTORY_CUE = re.compile(RECALL_CUE.pattern + r"|答应过|答应我|说好|约�
 # DEGRADE (the gate failed: timeout, error, or no time left in the budget). Never "inject what the ranking found":
 #   intent failed, no history in the message        -> no memory (nothing unverified for a message that does not need it)
 #   intent failed, the message leans on the past     -> search, and the judge still decides
-#   judge failed, need yes / leans on the past        -> only strong candidates (not found by meaning alone, or named)
+#   judge failed, need yes / leans on the past        -> at most one candidate the cross-encoder is near-certain of (FALLBACK_SCORE)
 #   judge failed, need maybe                          -> no memory
 # A history question left with nothing says so (retry_hint): the bridge tells him he can recall it himself.
 MAX_DOCUMENTS = 2
 TIME_BOOST = 1.25
 RERANK_AMBIGUITY = 0.4
+# DeepSeek unreachable (network) on a message that plainly asks for the past: the cross-encoder alone may let ONE candidate
+# through, and only a near-certain one (live: the right memory scored 0.99, the wrong ones ~0.02 - 0.3).
+FALLBACK_SCORE = 0.9
+MENTION_MIN = 4  # shared rare trigrams for "his reply told this memory"
+_PUNCT = re.compile(r"[\s，。！？、；：“”‘’（）()…~～!?,.`*「」]")
+
+
+def _tri(text: str) -> set[str]:
+    t = _PUNCT.sub("", text)
+    return {t[i:i + 3] for i in range(len(t) - 2)}
+
+FALLBACK_DOCS = 2
 RERANK_DOCS = 5  # a rerank scores only the leading candidates: it must fit in the bridge's per-turn memory budget
 RERANK_FLOOR = float(os.environ.get("MEMORY_RERANK_FLOOR", "") or 0.02)
 # Rescue: a question nothing passed the gates for ("你应该怎么叫我" vs a memory that says "小太阳") gets its nearest memories
@@ -124,6 +136,12 @@ SEEN_TTL_HOURS = float(os.environ.get("PENUMBRA_SEEN_TTL_HOURS", "") or 6.0)
 DISPLAY_OFFSET = 8
 MATCHED_EPISODES = 2  # the Episodes that matched a Pattern travel with it, so the prompt carries the evidence that made it relevant
 STATE_LIMIT = 6
+# The words themselves (after Resurface's neighbouring turns): the top Episode of each delivered memory brings the original
+# lines that match the turn best, each with the line before and after it in its conversation - an Episode's account can
+# drop the very detail she asks about with 上次.
+QUOTE_HITS = 2
+QUOTE_LINE = 160
+QUOTE_CAP = 700
 
 
 class BGEReranker:
@@ -390,7 +408,7 @@ class MemoryRead:
     def _episode_memory(e: dict, thread_tags: list[str] | None = None) -> tuple[files.Memory, dict]:
         # Search reads the full account (its concrete words find it); the excerpt is for reading, so it only trails the body.
         title = re.split(r"[。！？\n]", e["content"])[0][:40] or e["content"][:40]
-        body = e["content"] + (f"\n状态：{e['state']}" if e["state"] else "") + (f"\n{e['excerpt']}" if e.get("excerpt") else "")
+        body = e["content"] + (f"\n状态：{e['state']}" if e["state"] else "") + (f"\n{e['excerpt']}" if e.get("excerpt") else "") + (f"\n{e['cues']}" if e.get("cues") else "")
         if e.get("kind") == "dream":  # a dream is found like any memory, but never mistaken for something that happened
             hers = identity.is_user(e.get("owner"))  # the user's own dream, told to the assistant
             title = f"（{identity.current().user_pronoun + '的梦' if hers else '梦'}）{title}"
@@ -489,7 +507,7 @@ class MemoryRead:
                 "version": e["version"], "status": e["status"], "kind": e.get("kind") or "", "tag": e.get("tag") or "", "commit_status": e.get("commit_status") or "",
                 "source_ref": e.get("source_ref") or "", "owner": e.get("owner") or ""}
 
-    def _rescue(self, text: str) -> list[dict]:
+    def _rescue(self, text: str, max_docs: int = RESCUE_DOCS) -> list[dict]:
         vstore = getattr(self.svc, "vectors", None)
         if not vstore or not vstore.enabled:
             return []
@@ -510,7 +528,7 @@ class MemoryRead:
                         cands.append(("PATTERN", sid, f"{p['title']}\n{p['narrative'][:300]}\n当前状态：{p['current_state']}", p["current_state_since"], [], sim))
             except NotFound:
                 continue
-        cands = cands[:RESCUE_DOCS]
+        cands = cands[:max_docs]
         if not cands:
             return []
         sure = near[0][1] >= RESCUE_SURE_SIMILARITY and (len(near) < 2 or near[0][1] - near[1][1] >= RESCUE_SURE_GAP)
@@ -568,13 +586,115 @@ class MemoryRead:
             rows = self.svc.conn.execute("SELECT id FROM originals WHERE conversation_id = ? AND created_at >= ?", (conv, since)).fetchall()
         return {r["id"] for r in rows}
 
+    def _neighbours(self, raw: dict) -> tuple[str | None, str | None]:
+        """The ids of the message just before and just after a RAW message, in its own conversation."""
+        conv, at = raw.get("conversationId"), raw.get("createdAt")
+        if not conv or not at:
+            return None, None
+        with self.svc.lock:
+            before = self.svc.conn.execute("SELECT id FROM originals WHERE conversation_id = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT 1", (conv, at)).fetchone()
+            after = self.svc.conn.execute("SELECT id FROM originals WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC, rowid ASC LIMIT 1", (conv, at)).fetchone()
+        return (before["id"] if before else None), (after["id"] if after else None)
+
+    def _quotes(self, episode: dict, query: str, current: dict | None) -> list[dict]:
+        """The Episode's best-matching original lines with their neighbours, in time order; never the current session's."""
+        live = self._said_in_session(current) if current else set()
+        sources = []
+        for rid in dict.fromkeys(episode.get("source_raw_ids") or []):
+            if rid in live:
+                continue
+            try:
+                sources.append(self.core.raw_record(rid))
+            except NotFound:
+                continue
+        if not sources:
+            return []
+        grams = lambda t: {t[i:i + 2] for i in range(len(t) - 1)}
+        q = grams(re.sub(r"\s+", "", query))
+        ranked = sorted(sources, key=lambda r: -len(q & grams(re.sub(r"\s+", "", r["content"]))))
+        hits = ranked[:QUOTE_HITS]
+        ids = []
+        for h in hits:
+            before, after = self._neighbours(h)
+            ids += [i for i in (before, h["id"], after) if i]
+        hit_ids = {h["id"] for h in hits}
+        rows, used = [], 0
+        for rid in dict.fromkeys(ids):
+            if rid in live:
+                continue
+            try:
+                r = self.core.raw_record(rid)
+            except NotFound:
+                continue
+            text = r["content"].strip()
+            if not text:
+                continue
+            text = text if len(text) <= QUOTE_LINE else text[:QUOTE_LINE] + "…"
+            if rows and used + len(text) > QUOTE_CAP:
+                break
+            used += len(text)
+            rows.append({"id": r["id"], "speaker": {"user": identity.user(), "assistant": identity.assistant()}.get(r["role"], r["role"]),
+                         "createdAt": r["createdAt"], "content": text, "hit": r["id"] in hit_ids})
+        return sorted(rows, key=lambda x: x["createdAt"])
+
     def _recently_carried(self, conversation_id: str | None) -> set[tuple[str, str, int]]:
-        """What any of his sessions in this conversation was given within COOLDOWN_HOURS (by version: a changed memory is new)."""
+        """What any of his sessions in this conversation brought up within COOLDOWN_HOURS (by version: a changed memory is
+        new). Brought up = his reply that turn actually told it (after Callback DLC's receipts, nothing copied): a memory he
+        was handed and left unsaid stays free. A turn whose reply cannot be found (a wake, a night) counts as told."""
         if not conversation_id:
             return set()
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=COOLDOWN_HOURS)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        rows = self.store.all("SELECT ref_kind, ref_id, version FROM seen WHERE conversation_id=? AND at>=?", (conversation_id, cutoff))
-        return {(r["ref_kind"], r["ref_id"], r["version"]) for r in rows}
+        rows = self.store.all("SELECT ref_kind, ref_id, version, at FROM seen WHERE conversation_id=? AND at>=?", (conversation_id, cutoff))
+        out = set()
+        for r in rows:
+            key = (r["ref_kind"], r["ref_id"], r["version"])
+            if key in out:
+                continue
+            reply = self._reply_for(conversation_id, r["ref_kind"], r["ref_id"], r["at"])
+            if reply is None or self._told(r["ref_kind"], r["ref_id"], reply):
+                out.add(key)
+        return out
+
+    def _reply_for(self, conversation_id: str, kind: str, ref_id: str, at: str) -> str | None:
+        """His reply in the turn that was handed this memory (the latest retrieval carrying it, up to `at`)."""
+        since = (datetime.fromisoformat(at.replace("Z", "+00:00")) - timedelta(minutes=30)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        column = "pattern_ids" if kind == "pattern" else "episode_ids"
+        row = self.store.one(f"SELECT turn_id FROM retrievals WHERE conversation_id=? AND at>=? AND at<=? AND {column} LIKE ? ORDER BY at DESC LIMIT 1",
+                             (conversation_id, since, at, f'%"{ref_id}"%'))
+        if not row or not row["turn_id"]:
+            return None
+        with self.svc.lock:
+            texts = self.svc.conn.execute("SELECT content FROM originals WHERE turn_id = ? AND role = 'assistant'", (row["turn_id"],)).fetchall()
+        return " ".join(t["content"] or "" for t in texts) if texts else None
+
+    def _told(self, kind: str, ref_id: str, reply: str) -> bool:
+        """Did the reply tell this memory? Shared rare character trigrams (rare across his own replies): calibrated on live
+        turns - replies that told it shared 5 - 29, unrelated replies 0 - 6. A miss errs to "told" (the old behaviour)."""
+        try:
+            if kind == "pattern":
+                p = self.store.pattern(ref_id)
+                text = f"{p['title']}{p['current_state']}{p['narrative']}" + "".join(e["content"] for e in self.store.episodes(ids=p["supporting_episode_ids"]))
+            else:
+                text = self.store.episode(ref_id)["content"]
+        except NotFound:
+            return True
+        df, n = self._reply_df()
+        rare = lambda t: {g for g in _tri(t) if df.get(g, 0) <= max(1, n * 0.01)}  # noqa: E731
+        return len(rare(text) & rare(reply)) >= MENTION_MIN
+
+    def _reply_df(self) -> tuple[dict, int]:
+        """How common each trigram is across his recent replies (cached; rebuilt every few hours)."""
+        cached = getattr(self, "_df_cache", None)
+        if cached and time.time() - cached[2] < 6 * 3600:
+            return cached[0], cached[1]
+        with self.svc.lock:
+            rows = self.svc.conn.execute("SELECT content FROM originals WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 3000").fetchall()
+        df: dict[str, int] = {}
+        for row in rows:
+            for g in _tri(row["content"] or ""):
+                df[g] = df.get(g, 0) + 1
+        self._df_cache = (df, max(1, len(rows)), time.time())
+        return df, max(1, len(rows))
 
     def confirm(self, inject_id: str, conversation_id: str, session_id: str, refs: list[dict]) -> dict:
         """The turn finished: what its retrieval offered now counts as seen by that Claude session (once, only offered refs)."""
@@ -824,11 +944,16 @@ class MemoryRead:
                            "profiles": [[n["name_id"], _profile_version(n["profile"])] for n in fresh]})
             profiles = [{"name": n["name"], "profile": n["profile"]} for n in fresh]
         # --- Rescue: a question that found nothing - its nearest memories by meaning, kept only if the cross-encoder agrees
+        budget = gate_module.BUDGET_S
         if not pure_time and not hits and QUESTION.search(query):
+            # only as many candidates as the cross-encoder can score while the judge still has its reserve
+            budget = gate_module.PAST_BUDGET_S
+            room = budget - (time.perf_counter() - started) - gate_module.JUDGE_RESERVE_S
+            n = min(RESCUE_DOCS, int(room // gate_module.RERANK_DOC_S))
             t0 = time.perf_counter()
-            rescued = self._rescue(meaning)
+            rescued = self._rescue(meaning, n) if n >= 1 else []
             hits.extend(rescued)
-            stages.append({"stage": "rescue", "added": [h["hitId"] for h in rescued], "latency_ms": round((time.perf_counter() - t0) * 1000)})
+            stages.append({"stage": "rescue", "added": [h["hitId"] for h in rescued], "docs": max(n, 0), "latency_ms": round((time.perf_counter() - t0) * 1000)})
         # --- Current session: an Episode told from lines his session still holds is the scene going on, not a memory
         current = body.get("currentSession") if isinstance(body.get("currentSession"), dict) else None
         if policy == "inject" and current and hits:
@@ -940,7 +1065,7 @@ class MemoryRead:
                     docs.append(f"{p['title']}：{p['narrative'][:300]}（现在：{p['current_state']}）")
                 else:
                     docs.append(self.store.episode(ident)["content"][:400])
-            left = gate_module.BUDGET_S - (time.perf_counter() - started)
+            left = budget - (time.perf_counter() - started)
             if degraded and degraded.startswith("intent_timeout"):
                 # DeepSeek just timed out on this very turn: asking again would only wait out a second timeout
                 verdict = {"latency_ms": 0, "error": "skipped: the intent call of this turn timed out", "failure": "timeout"}
@@ -952,6 +1077,17 @@ class MemoryRead:
                 # The judge did not answer: nothing unverified is handed over as if it were checked. A turn that
                 # needed the past gets retry_hint instead, so he can recall it himself.
                 kept_ids = set()
+                if history or asked_past:
+                    have = rerank.get("scores") or {}
+                    room = gate_module.PAST_BUDGET_S - (time.perf_counter() - started) - 0.3
+                    top = list(range(min(len(cands), FALLBACK_DOCS)))
+                    missing = [i for i in top if f"{cands[i][0]}:{cands[i][1]}" not in have][:max(0, int(room // gate_module.RERANK_DOC_S))]
+                    got = self.reranker.scores(meaning, [docs[i] for i in missing]) if missing else []
+                    scored = {i: have[f"{cands[i][0]}:{cands[i][1]}"] for i in top if f"{cands[i][0]}:{cands[i][1]}" in have}
+                    scored.update(zip(missing, got or []))
+                    sure = [i for i, sc in sorted(scored.items(), key=lambda kv: -kv[1]) if sc >= FALLBACK_SCORE][:1]
+                    kept_ids = {(cands[i][0], cands[i][1]) for i in sure}
+                    verdict["fallback"] = {"scores": {f"{cands[i][0]}:{cands[i][1]}": round(sc, 4) for i, sc in scored.items()}, "kept": len(sure)}
                 degraded = f"{degraded}+judge_{verdict.get('failure', 'error')}_dropped" if degraded else f"judge_{verdict.get('failure', 'error')}_dropped"
             ranked = [(pid, g) for pid, g in ranked if ("pattern", pid) in kept_ids]
             orphans = {eid: h for eid, h in orphans.items() if ("episode", eid) in kept_ids}
@@ -974,11 +1110,13 @@ class MemoryRead:
             view.update(score=round(g["score"], 4), why=g["why"], matched_episode_ids=matched,
                         matched_episodes=[{k: ev[k] for k in ("episode_id", "content", "time_start", "state", "version", "threads", "causal", "attachment_ids")}
                                           for ev in (self._with_threads(self.episode_view(self.store.episode(i))) for i in matched[:MATCHED_EPISODES])])
+            if view["matched_episodes"]:
+                view["matched_episodes"][0]["quotes"] = self._quotes(self.store.episode(view["matched_episodes"][0]["episode_id"]), query, current)
             patterns.append(view)
         episodes = []
         for h in orphan_list:
             ev = self._with_threads(self.episode_view(self.store.episode(h["hitId"])))
-            ev.update(score=h["score"], why=h.get("reason", ""))
+            ev.update(score=h["score"], why=h.get("reason", ""), quotes=self._quotes(ev, query, current))
             episodes.append(ev)
         docs = []
         for h in documents:

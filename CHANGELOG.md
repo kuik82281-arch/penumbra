@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.0 — 2026-11-20
+
+- Original words: the top Episode of each delivered memory carries `quotes` - the original lines that best match the
+  turn (at most two), each with the line before and after it in its conversation, in time order, never from the
+  current session, capped at 700 characters. An Episode's account can leave out the very detail the user asks about.
+  (Idea: neighbouring turns, as in Resurface.)
+- Time budget: a question to the past that found nothing may use `MEMORY_GATE_PAST_BUDGET` (7 s; the bridge should wait
+  longer). Its rescue search scores only as many candidates as fit while the judge keeps 1.5 s - a rescue that used up
+  the budget had left the judge no time, and the turn recalled nothing.
+- Network fallback: when DeepSeek cannot be reached on a message that plainly asks for the past, the cross-encoder may
+  let in one candidate it is near-certain of (score >= 0.9).
+- Cooldown by what was said: a memory is held back across sessions only if the assistant's reply that turn actually
+  told it (shared rare character trigrams); one that was handed over and left unsaid stays free.
+- Recall cues (`memory/cues.py`, prompt `cues.md`): each Episode version gets 0-4 short searchable lines - the situation
+  without its topic words, how the user might ask, a telling detail, what was left open. Quotes are checked against the
+  originals; cues are never shown and never bump the Episode's version; the nightly run writes 40 at a time.
+  `PENUMBRA_CUES=off` turns them off. (Idea: write-time cues, as in Callback DLC.)
+
 ## v0.5.0 — 2026-10-25
 
 - Daytime consolidation: the idle scheduler takes an `any_hour` setting (`POST /memory-core/settings`, off by default).

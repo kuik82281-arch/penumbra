@@ -38,6 +38,7 @@ from .quotes import plan_texts, unverified_quotes
 from .store import Store, dumps, mint, now_iso
 from . import names as names_module
 from . import threads as threads_module
+from . import cues as cues_module
 from .verification import PROMPT_VERSION, Verifier, build_payload
 
 WINDOW_CHARS = 2600
@@ -498,6 +499,12 @@ class Pipeline:
                 summary["profiles"] = len(names_module.refresh_profiles(self.store, self.verifier.client))
             # Closed threads whose Episodes changed (by this run or by her hand since) get their story written again; a
             # failure is tried again on the next run, so this runs whether or not this run wrote anything.
+            # Recall cues for new or changed Episodes (cues.py): a few each run, the rest on the next.
+            if self.verifier.available() and os.environ.get("PENUMBRA_CUES", "on") != "off":
+                try:
+                    summary["cues"] = cues_module.run(self.store, self.core.raw_record, self.verifier.client, limit=40)
+                except Exception as error:  # noqa: BLE001 - cues are an extra; the run stands without them
+                    summary["cues"] = {"error": str(error)[:200]}
             if self.verifier.available():
                 summary["stories"] = len(threads_module.refresh_stories(self.store, self.verifier.client))
             self.store.audit(f"run.{status}", run_id, after=summary)

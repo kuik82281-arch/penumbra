@@ -214,11 +214,15 @@ EPISODE_COMMITMENT_COLUMNS = (("kind", "TEXT NOT NULL DEFAULT ''"), ("tag", "TEX
                               ("source_ref", "TEXT NOT NULL DEFAULT ''"),
                               # One line on what the Episode is and what it meant (精简唯美, names the thing): what threads, recall
                               # in passing and the Memory Studio show first; content keeps the full account. '' on older Episodes.
-                              ("excerpt", "TEXT NOT NULL DEFAULT ''"))
+                              ("excerpt", "TEXT NOT NULL DEFAULT ''"),
+                              # Recall cues (cues.py): a few lines on how this Episode might be looked for later - the situation,
+                              # how she might ask, a telling detail, what was left open. Searchable, never shown. cues_for: the
+                              # version they were written for (a changed Episode gets new ones).
+                              ("cues", "TEXT NOT NULL DEFAULT ''"), ("cues_for", "INTEGER NOT NULL DEFAULT 0"))
 EPISODE_COLUMNS = ("episode_id", "content", "time_start", "time_end", "entities", "topics", "relations", "state", "importance", "confidence",
                    "source_raw_ids", "attachment_ids", "status", "superseded_by", "origin", "candidate_id", "decision_id", "created_at", "updated_at",
                    "version", *(name for name, _ in EPISODE_COMMITMENT_COLUMNS))
-EPISODE_DEFAULTS = {"kind": "", "tag": "", "owner": "", "due_at": None, "commit_status": "", "resolved_at": None, "missed_told_at": None, "source_ref": "", "excerpt": ""}
+EPISODE_DEFAULTS = {"kind": "", "tag": "", "owner": "", "due_at": None, "commit_status": "", "resolved_at": None, "missed_told_at": None, "source_ref": "", "excerpt": "", "cues": "", "cues_for": 0}
 PATTERN_JSON = ("states", "supporting_episode_ids", "entities")
 
 

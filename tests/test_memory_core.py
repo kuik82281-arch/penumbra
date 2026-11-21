@@ -493,6 +493,12 @@ class ReadTest(Base):
         self.assertEqual(lock["locked_pattern_ids"], [self.pat["pattern_id"]])
         self.assertIn(self.fight, lock["locked_episode_ids"])
 
+    def test_delivered_memory_carries_its_original_words(self):
+        r = self.retrieve("我们闹别扭了你该怎么做")
+        quotes = r["patterns"][0]["matched_episodes"][0]["quotes"]
+        self.assertTrue(any(q["hit"] and "先抱住我" in q["content"] for q in quotes))
+        self.assertEqual([q["createdAt"] for q in quotes], sorted(q["createdAt"] for q in quotes))
+
     def test_search_once_per_turn(self):
         first = self.retrieve("我们闹别扭了你该怎么做")
         again = self.retrieve("完全不同的另一句话：咖啡", turn="turn-1")
@@ -519,6 +525,18 @@ class ReadTest(Base):
         # Another session within the cooldown: not brought up again by itself; asked for the past, it is.
         self.assertEqual(self.memory.read.retrieve({"query": "闹别扭了怎么办", "turnId": "t-d", "conversationId": CONV, "sessionId": "s2"})["status"], "NO_MEMORY_NEEDED")
         self.assertEqual(self.memory.read.retrieve({"query": "上次说的闹别扭了怎么办", "turnId": "t-e", "conversationId": CONV, "sessionId": "s2"})["status"], "LOCKED")
+
+    def test_cooldown_only_holds_what_his_reply_told(self):
+        def handed(turn, reply, n):
+            got = self.memory.read.retrieve({"query": "闹别扭了怎么办", "turnId": turn, "conversationId": CONV, "sessionId": f"s-{turn}"})
+            self.assertEqual(got["status"], "LOCKED")
+            self.svc.ingest_originals("user", CONV, [{"id": f"r{n}", "role": "assistant", "content": reply, "createdAt": "2026-09-24T12:00:00Z", "turnId": turn}])
+            self.memory.read.confirm(got["inject_id"], CONV, f"s-{turn}", got["refs"])
+        handed("t-a", "今天想吃什么？我去买菜。", 1)  # handed the memory, did not tell it
+        other = {"query": "闹别扭了怎么办", "conversationId": CONV, "sessionId": "s2"}
+        self.assertEqual(self.memory.read.retrieve({**other, "turnId": "t-b"})["status"], "LOCKED")
+        handed("t-c", "我们吵架的时候我先抱住你，别讲道理，等你冷静下来再说。", 2)  # told it
+        self.assertEqual(self.memory.read.retrieve({**other, "turnId": "t-d"})["status"], "NO_MEMORY_NEEDED")
 
     def test_a_new_pattern_version_is_offered_again(self):
         first = self.retrieve("闹别扭了怎么办", turn="t-a")

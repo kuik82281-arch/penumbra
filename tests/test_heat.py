@@ -7,7 +7,7 @@ from tests.support import Base
 
 class HeatTest(Base):
     def seen(self, episode_id, days_ago):
-        at = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+        at = (self.svc._now() - timedelta(days=days_ago)).isoformat()  # the service's clock, not today's: the test must not age
         with self.memory.store.tx() as db:
             db.execute("INSERT INTO seen VALUES (?,?,?,?,?,?)", ("c1", f"s{days_ago}", "episode", episode_id, 1, at))
 

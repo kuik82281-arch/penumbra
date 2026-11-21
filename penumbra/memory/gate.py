@@ -26,6 +26,12 @@ MAX_LINE = 300
 MAX_CANDIDATES = 5
 BUDGET_S = float(os.environ.get("MEMORY_GATE_BUDGET", "") or 5.5)
 CALL_TIMEOUT_S = float(os.environ.get("MEMORY_GATE_TIMEOUT", "") or 2.0)
+# A question to the past that found nothing gets a rescue search, and the rescue's cross-encoder costs about a second a
+# candidate on CPU: such a turn may use the slack the bridge leaves (it waits 7.5 s), and the judge keeps its share of
+# it - a rescue that ate the whole budget used to leave the judge nothing, and the turn recalled nothing.
+PAST_BUDGET_S = float(os.environ.get("MEMORY_GATE_PAST_BUDGET", "") or 7.0)
+JUDGE_RESERVE_S = 1.5
+RERANK_DOC_S = 1.0
 MIN_CALL_S = 0.6  # less time than this left in the budget: the call is not made (it could not answer in time)
 # Circuit breaker: after this many timeouts / network errors in a row, DeepSeek is not asked for a while - a turn then
 # degrades at once instead of waiting out two timeouts while the service is down.
